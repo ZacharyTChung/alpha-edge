@@ -71,9 +71,11 @@ class Market(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     platform: Mapped[Platform] = mapped_column(SAEnum(Platform, name="platform"))
+    external_id: Mapped[str | None] = mapped_column(Text, nullable=True, unique=True, index=True)
     question_text: Mapped[str] = mapped_column(Text)
     category: Mapped[Category] = mapped_column(SAEnum(Category, name="category"))
     resolution_criteria: Mapped[str] = mapped_column(Text)
+    liquidity: Mapped[float] = mapped_column(Float, default=0.0)
     close_time: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     outcome: Mapped[Outcome | None] = mapped_column(
@@ -126,6 +128,8 @@ class SentimentEvent(Base):
     sentiment: Mapped[SentimentLabel] = mapped_column(SAEnum(SentimentLabel, name="sentiment_label"))
     credibility_weight: Mapped[float] = mapped_column(Float, default=0.5)
     novelty_score: Mapped[float] = mapped_column(Float, default=1.0)
+    relevance_score: Mapped[float] = mapped_column(Float, default=1.0)
+    llm_reasoning: Mapped[str | None] = mapped_column(Text, nullable=True)
     detected_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

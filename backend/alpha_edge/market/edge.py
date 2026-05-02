@@ -54,6 +54,9 @@ def current_edge_report(
                 market_price=signal.market_price,
                 edge=signal.edge,
                 signal_tier=signal.signal_tier,
+                platform=market.platform,
+                category=market.category,
+                liquidity=float(market.liquidity or 0.0),
             )
         )
     items.sort(key=lambda x: abs(x.edge), reverse=True)

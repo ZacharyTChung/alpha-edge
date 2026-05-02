@@ -1,13 +1,16 @@
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000";
 
 export type SignalTier = "STRONG" | "LEAN" | "NONE" | "FADE";
+export type Platform = "kalshi" | "polymarket";
+export type Category = "sports" | "politics" | "finance";
 
 export interface Market {
   id: string;
-  platform: "kalshi" | "polymarket";
+  platform: Platform;
   question_text: string;
-  category: "sports" | "politics" | "finance";
+  category: Category;
   resolution_criteria: string;
+  liquidity: number;
   close_time: string;
   resolved_at: string | null;
   outcome: "YES" | "NO" | null;
@@ -28,6 +31,21 @@ export interface Signal {
   generated_at: string;
 }
 
+export interface SentimentEvent {
+  id: string;
+  market_id: string;
+  source: "twitter" | "reddit" | "news";
+  source_url: string;
+  entity: string;
+  raw_text: string;
+  sentiment: "positive" | "negative" | "neutral";
+  credibility_weight: number;
+  novelty_score: number;
+  relevance_score: number;
+  llm_reasoning: string | null;
+  detected_at: string;
+}
+
 export interface EdgeReportItem {
   market_id: string;
   question_text: string;
@@ -35,6 +53,38 @@ export interface EdgeReportItem {
   market_price: number;
   edge: number;
   signal_tier: SignalTier;
+  platform: Platform | null;
+  category: Category | null;
+  liquidity: number;
+}
+
+export interface DashboardStats {
+  market_count: number;
+  open_market_count: number;
+  signal_count: number;
+  sentiment_count: number;
+  sentiment_last_24h: number;
+  last_signal_at: string | null;
+  by_tier: Record<SignalTier, number>;
+}
+
+export interface ClosingLineSample {
+  market_id: string;
+  question_text: string;
+  initial_model_p: number;
+  initial_market_p: number;
+  final_market_p: number;
+  initial_edge: number;
+  market_moved_toward_edge: number;
+  outcome: string | null;
+}
+
+export interface ClosingLineTracking {
+  resolved_markets_with_signals: number;
+  direction_hit_rate: number | null;
+  avg_market_move_toward_edge: number | null;
+  resolution_accuracy: number | null;
+  samples: ClosingLineSample[];
 }
 
 async function get<T>(path: string): Promise<T> {
@@ -46,8 +96,16 @@ async function get<T>(path: string): Promise<T> {
 }
 
 export const api = {
-  listMarkets: () => get<Market[]>("/markets"),
+  listMarkets: (limit = 200) => get<Market[]>(`/markets?limit=${limit}`),
   getMarket: (id: string) => get<Market>(`/markets/${id}`),
   getMarketSignals: (id: string) => get<Signal[]>(`/markets/${id}/signals`),
-  getEdgeReport: () => get<EdgeReportItem[]>("/edge-report"),
+  getEdgeReport: (minEdge = 0.03) =>
+    get<EdgeReportItem[]>(`/edge-report?min_edge=${minEdge}&limit=200`),
+  getMarketSentiment: (id: string) => get<SentimentEvent[]>(`/markets/${id}/sentiment`),
+  getStats: () => get<DashboardStats>("/stats"),
+  getClosingLine: () => get<ClosingLineTracking>("/admin/closing-line-tracking"),
+  refresh: (priority = false) =>
+    fetch(`${API_BASE}${priority ? "/admin/refresh-priority" : "/admin/refresh"}`, {
+      method: "POST",
+    }).then((r) => r.json()),
 };

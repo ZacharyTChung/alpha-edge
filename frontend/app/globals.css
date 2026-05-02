@@ -92,3 +92,15 @@ th {
 .tier-FADE {
   color: var(--bad);
 }
+
+.sentiment-positive {
+  color: var(--accent);
+}
+
+.sentiment-negative {
+  color: var(--bad);
+}
+
+.sentiment-neutral {
+  color: var(--muted);
+}

@@ -1,8 +1,9 @@
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
-from alpha_edge.api import alerts, calibration, edge, markets, players, sentiment, signals
+from alpha_edge.api import admin, alerts, calibration, edge, markets, players, sentiment, signals, stats
 from alpha_edge.config import get_settings
 
 
@@ -20,6 +21,13 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["http://localhost:3000"],
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
     app.include_router(markets.router)
     app.include_router(signals.router)
     app.include_router(sentiment.router)
@@ -27,6 +35,8 @@ def create_app() -> FastAPI:
     app.include_router(calibration.router)
     app.include_router(edge.router)
     app.include_router(alerts.router)
+    app.include_router(admin.router)
+    app.include_router(stats.router)
 
     @app.get("/health")
     def health() -> dict[str, str]:

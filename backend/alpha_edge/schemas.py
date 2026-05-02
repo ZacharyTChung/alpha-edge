@@ -25,6 +25,7 @@ class MarketOut(BaseModel):
     question_text: str
     category: Category
     resolution_criteria: str
+    liquidity: float = 0.0
     close_time: datetime
     resolved_at: datetime | None
     outcome: Outcome | None
@@ -59,6 +60,8 @@ class SentimentEventOut(BaseModel):
     sentiment: SentimentLabel
     credibility_weight: float
     novelty_score: float
+    relevance_score: float = 1.0
+    llm_reasoning: str | None = None
     detected_at: datetime
 
 
@@ -103,6 +106,9 @@ class EdgeReportItem(BaseModel):
     market_price: float
     edge: float
     signal_tier: SignalTier
+    platform: Platform | None = None
+    category: Category | None = None
+    liquidity: float = 0.0
 
 
 class AlertSubscriptionIn(BaseModel):

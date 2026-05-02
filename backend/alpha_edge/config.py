@@ -30,6 +30,10 @@ class Settings(BaseSettings):
 
     alert_webhook_default_url: str | None = None
 
+    anthropic_api_key: str | None = None
+    anthropic_sentiment_model: str = "claude-sonnet-4-6"
+    llm_min_liquidity: float = 1000.0  # skip LLM classification on illiquid markets
+
 
 @lru_cache
 def get_settings() -> Settings:

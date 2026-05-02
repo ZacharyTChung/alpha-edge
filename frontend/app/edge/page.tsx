@@ -1,12 +1,13 @@
-import Link from "next/link";
-
 import { api, type EdgeReportItem } from "@/lib/api";
+import { EdgeTable } from "./edge-table";
+
+export const dynamic = "force-dynamic";
 
 export default async function EdgePage() {
   let items: EdgeReportItem[] = [];
   let error: string | null = null;
   try {
-    items = await api.getEdgeReport();
+    items = await api.getEdgeReport(0.02);
   } catch (err) {
     error = err instanceof Error ? err.message : String(err);
   }
@@ -15,36 +16,11 @@ export default async function EdgePage() {
     <section>
       <h2>Edge Report</h2>
       <p style={{ color: "var(--muted)" }}>
-        Open markets sorted by absolute edge. Strong tier = ≥10% gap.
+        Open markets sorted by absolute edge. Strong tier ≥ 10pp gap, Lean ≥ 4pp, Fade ≤ −10pp.
+        Filter by tier, category, or platform below.
       </p>
       {error ? <p>API unreachable: {error}</p> : null}
-      {!error && items.length === 0 ? <p>No edges above threshold.</p> : null}
-      {items.length > 0 ? (
-        <table>
-          <thead>
-            <tr>
-              <th>Market</th>
-              <th>Model</th>
-              <th>Price</th>
-              <th>Edge</th>
-              <th>Tier</th>
-            </tr>
-          </thead>
-          <tbody>
-            {items.map((item) => (
-              <tr key={item.market_id}>
-                <td>
-                  <Link href={`/markets/${item.market_id}`}>{item.question_text}</Link>
-                </td>
-                <td>{(item.model_probability * 100).toFixed(1)}%</td>
-                <td>{(item.market_price * 100).toFixed(1)}%</td>
-                <td>{(item.edge * 100).toFixed(2)}</td>
-                <td className={`tier-${item.signal_tier}`}>{item.signal_tier}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      ) : null}
+      {!error ? <EdgeTable items={items} /> : null}
     </section>
   );
 }
