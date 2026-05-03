@@ -173,6 +173,9 @@ def get_calculation(market_id: UUID, db: Session = Depends(get_session)) -> dict
             "bonuses": decision_result.confidence_breakdown.bonuses,
             "flags": decision_result.confidence_breakdown.flags,
             "reasoning": decision_result.reasoning,
+            "outcome_forecast": decision_result.outcome_forecast,
+            "outcome_forecast_pct": round(decision_result.outcome_forecast_pct, 4),
+            "saturated_market": decision_result.saturated_market,
         },
         "player_prop": prop_block,
         "math_note": (

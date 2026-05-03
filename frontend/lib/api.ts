@@ -107,6 +107,9 @@ export interface DecisionInfo {
   bonuses: string[];
   flags: Record<string, boolean>;
   reasoning: string;
+  outcome_forecast: "YES" | "NO" | "UNCERTAIN";
+  outcome_forecast_pct: number;
+  saturated_market: boolean;
 }
 
 export interface PlayerPropInfo {

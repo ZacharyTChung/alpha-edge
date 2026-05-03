@@ -18,12 +18,19 @@ from alpha_edge.sentiment.credibility import beta_for
 
 Decision = Literal["BET_OVER", "BET_UNDER", "NO_BET"]
 RiskLevel = Literal["LOW", "MEDIUM", "HIGH"]
+OutcomeForecast = Literal["YES", "NO", "UNCERTAIN"]
 
 # v2.0 thresholds
 EDGE_NOISE_THRESHOLD = 0.03          # |edge| below 3pp = NO BET
 EDGE_ACTIONABLE_THRESHOLD = 0.05     # need 5pp edge to recommend a bet
 CONFIDENCE_BET_FLOOR = 7             # need confidence ≥ 7 to recommend
 CONFIDENCE_FLOOR = 3                 # output never below this
+
+# A market is "saturated" when its price has run so close to the bound that
+# the available payout is too small to justify any risk, regardless of model
+# disagreement. At p=0.99 a YES bet pays 1¢ on the dollar — not actionable.
+SATURATED_HIGH = 0.95
+SATURATED_LOW = 0.05
 
 
 @dataclass
@@ -42,6 +49,12 @@ class DecisionResult:
     confidence: int
     confidence_breakdown: ConfidenceBreakdown
     reasoning: str
+    # Independent of the bet recommendation — what does the model think will
+    # happen? Useful when the market is saturated and there's no betting edge
+    # but the user still wants to know the predicted outcome.
+    outcome_forecast: OutcomeForecast = "UNCERTAIN"
+    outcome_forecast_pct: float = 0.5
+    saturated_market: bool = False
 
 
 def compute_confidence(
@@ -118,9 +131,14 @@ def make_decision(
 ) -> DecisionResult:
     edge = prediction.probability - market_price
     conf = compute_confidence(events, prediction, market_price)
+    saturated = market_price >= SATURATED_HIGH or market_price <= SATURATED_LOW
 
-    if abs(edge) < EDGE_NOISE_THRESHOLD or conf.score < CONFIDENCE_BET_FLOOR:
+    if saturated:
+        # No actionable edge in a saturated market regardless of any small
+        # numeric disagreement. Force NO_BET.
         decision: Decision = "NO_BET"
+    elif abs(edge) < EDGE_NOISE_THRESHOLD or conf.score < CONFIDENCE_BET_FLOOR:
+        decision = "NO_BET"
     elif edge >= EDGE_ACTIONABLE_THRESHOLD:
         decision = "BET_OVER"
     elif edge <= -EDGE_ACTIONABLE_THRESHOLD:
@@ -138,10 +156,35 @@ def make_decision(
     else:
         risk = "MEDIUM"
 
-    # Reasoning
-    if decision == "NO_BET":
+    # Reasoning — saturated case gets a special, didactic explanation since
+    # this is the most common source of "why doesn't it bet?" confusion.
+    if saturated:
+        if market_price >= SATURATED_HIGH:
+            side, payout_pp = "YES", (1.0 / market_price - 1.0) * 100
+            reason = (
+                f"Market is already pricing YES at {market_price*100:.1f}% — the model "
+                f"{'agrees' if abs(edge) < 0.01 else 'is close to market'} "
+                f"({prediction.probability*100:.1f}%). A YES bet at this price pays only "
+                f"{payout_pp:.2f}¢ per dollar risked, so there's no edge to capture even "
+                f"though the outcome is nearly certain. Alpha Edge looks for mispricings, "
+                f"not predictions; a near-certain outcome priced as near-certain has no "
+                f"betting edge."
+            )
+        else:
+            side, payout_pp = "NO", (1.0 / (1.0 - market_price) - 1.0) * 100
+            reason = (
+                f"Market is already pricing NO at {(1-market_price)*100:.1f}% (YES at "
+                f"{market_price*100:.1f}%). The model {prediction.probability*100:.1f}% "
+                f"agrees the outcome will most likely be NO. A NO bet at this price pays "
+                f"only {payout_pp:.2f}¢ per dollar risked — not actionable."
+            )
+    elif decision == "NO_BET":
         if abs(edge) < EDGE_NOISE_THRESHOLD:
-            reason = f"Edge of {edge*100:+.1f}pp is below 3pp noise threshold."
+            reason = (
+                f"Model {prediction.probability*100:.1f}% vs market "
+                f"{market_price*100:.1f}% — edge of {edge*100:+.1f}pp is below the 3pp "
+                f"noise threshold. Model and market agree."
+            )
         elif conf.score < CONFIDENCE_BET_FLOOR:
             reason = f"Confidence {conf.score}/10 is below bet floor of {CONFIDENCE_BET_FLOOR}/10."
         else:
@@ -155,6 +198,15 @@ def make_decision(
             f"(Δℓ = {prediction.delta_log_odds:+.3f}). Confidence {conf.score}/10."
         )
 
+    # Outcome forecast — distinct from the bet rec
+    p = prediction.probability
+    if p >= 0.70:
+        forecast: OutcomeForecast = "YES"
+    elif p <= 0.30:
+        forecast = "NO"
+    else:
+        forecast = "UNCERTAIN"
+
     return DecisionResult(
         decision=decision,
         risk_level=risk,
@@ -162,4 +214,7 @@ def make_decision(
         confidence=conf.score,
         confidence_breakdown=conf,
         reasoning=reason,
+        outcome_forecast=forecast,
+        outcome_forecast_pct=p,
+        saturated_market=saturated,
     )

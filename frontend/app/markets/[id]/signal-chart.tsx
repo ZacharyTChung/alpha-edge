@@ -46,9 +46,15 @@ export function SignalChart({ signals, width = 720, height = 240 }: Props) {
     .join(" ");
 
   // Build the edge-zone polygon: model line forward, market line reverse, with
-  // a fill color tied to the sign of the latest edge.
+  // a fill color tied to the sign of the latest edge. When |edge| is sub-1pp,
+  // the directional shading is misleading (rounding noise), so use neutral.
   const latestEdge = ordered[ordered.length - 1].edge;
-  const edgeColor = latestEdge >= 0 ? "rgba(74, 222, 128, 0.18)" : "rgba(239, 68, 68, 0.18)";
+  const edgeColor =
+    Math.abs(latestEdge) < 0.01
+      ? "rgba(138, 143, 152, 0.10)"
+      : latestEdge >= 0
+      ? "rgba(74, 222, 128, 0.18)"
+      : "rgba(239, 68, 68, 0.18)";
   const polyPoints = [
     ...ordered.map((s, i) => `${xFor(times[i]).toFixed(1)},${yFor(s.model_probability).toFixed(1)}`),
     ...ordered
@@ -88,7 +94,15 @@ export function SignalChart({ signals, width = 720, height = 240 }: Props) {
       >
         <span style={{ color: "var(--accent)" }}>● model probability</span>
         <span style={{ color: "var(--fg)" }}>● market price</span>
-        <span>shaded zone = current edge ({latestEdge >= 0 ? "model favors YES" : "model favors NO"})</span>
+        <span>
+          shaded zone = current edge (
+          {Math.abs(latestEdge) < 0.01
+            ? "essentially zero — model agrees with market"
+            : latestEdge >= 0
+            ? "model favors YES"
+            : "model favors NO"}
+          )
+        </span>
       </div>
       <svg
         width={width}
