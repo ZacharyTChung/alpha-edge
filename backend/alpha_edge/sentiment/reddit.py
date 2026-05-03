@@ -136,11 +136,14 @@ _STOPWORDS = {
 
 
 def match_terms(docs: Iterable[RedditDoc], terms: list[str]) -> list[RedditDoc]:
+    """Same acceptance rules as news.match_terms — multi-word OR 2+ single
+    OR a sufficiently specific long single term."""
     multi = [t.lower() for t in terms if " " in t]
     single = [
         t.lower() for t in terms
         if " " not in t and len(t) >= 5 and t.lower() not in _STOPWORDS
     ]
+    long_single = [t for t in single if len(t) >= 7]
     if not (multi or single):
         return []
     out: list[RedditDoc] = []
@@ -148,7 +151,8 @@ def match_terms(docs: Iterable[RedditDoc], terms: list[str]) -> list[RedditDoc]:
         hay = f"{d.title} {d.body}".lower()
         m_hits = [n for n in multi if n in hay]
         s_hits = [n for n in single if n in hay]
-        if m_hits or s_hits:
+        long_hits = [n for n in long_single if n in hay]
+        if m_hits or len(s_hits) >= 2 or long_hits:
             d.matched_terms = m_hits + s_hits
             out.append(d)
     return out

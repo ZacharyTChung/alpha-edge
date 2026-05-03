@@ -1,12 +1,18 @@
 """Admin endpoints — manual pipeline triggers + diagnostics."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
-from sqlalchemy import select
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from alpha_edge.db import get_session
-from alpha_edge.db.models import Market, Outcome, Signal
+from alpha_edge.db.models import Market, Outcome, SentimentEvent, SentimentLabel, Signal
+from alpha_edge.ingestion import basketball_ref as bbref_mod
+from alpha_edge.market.edge import classify_tier
+from alpha_edge.model.predict import predict_market
+from alpha_edge.sentiment import llm as llm_mod
 from alpha_edge.workers.tasks import refresh_all, refresh_priority
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -35,6 +41,134 @@ def refresh_priority_endpoint(
         min_liquidity=min_liquidity,
     )
     return summary.to_dict()
+
+
+@router.post("/reclassify-market/{market_id}")
+def reclassify_market(market_id: UUID, db: Session = Depends(get_session)) -> dict:
+    """Re-run Claude on every existing sentiment event for this market.
+
+    Updates `sentiment`, `relevance_score`, `credibility_weight`, `llm_reasoning`
+    in place. Drops events Claude judges off-topic (relevance < 0.2). Then
+    regenerates the latest Signal so the model probability reflects the cleaned
+    evidence.
+
+    Use this on markets with mostly VADER-fallback events that don't actually
+    align with the question — typically stale events ingested before the LLM
+    layer was wired.
+    """
+    if not llm_mod.is_configured():
+        raise HTTPException(
+            status_code=400,
+            detail="ANTHROPIC_API_KEY not set — reclassify needs the LLM",
+        )
+
+    market = db.get(Market, market_id)
+    if market is None:
+        raise HTTPException(status_code=404, detail="Market not found")
+
+    events = list(
+        db.scalars(
+            select(SentimentEvent).where(SentimentEvent.market_id == market_id)
+        )
+    )
+    if not events:
+        return {"reclassified": 0, "dropped": 0, "kept": 0}
+
+    texts = [e.raw_text for e in events]
+    sources = [
+        f"{e.source.value}:{e.entity}" if e.entity else e.source.value for e in events
+    ]
+    stats_context = bbref_mod.market_stats_context(market.question_text)
+
+    # Pass the platform/category as additional disambiguating context — without
+    # this, "Chicago WS vs Los Angeles A" matches LA Lakers articles.
+    contextual_question = (
+        f"[{market.platform.value}/{market.category.value}] {market.question_text}"
+    )
+
+    # Batch in chunks of 12 — Claude truncates output silently when many texts
+    # are passed at once, and returns 0 parseable classifications.
+    BATCH = 12
+    classifications: list = []
+    for i in range(0, len(events), BATCH):
+        chunk_texts = texts[i : i + BATCH]
+        chunk_sources = sources[i : i + BATCH]
+        chunk_classifications = llm_mod.classify_for_market(
+            market_question=contextual_question,
+            texts=chunk_texts,
+            sources=chunk_sources,
+            stats_context=stats_context,
+        )
+        if len(chunk_classifications) != len(chunk_texts):
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    f"LLM returned {len(chunk_classifications)} classifications "
+                    f"for {len(chunk_texts)} texts in batch starting at index {i}"
+                ),
+            )
+        classifications.extend(chunk_classifications)
+
+    label_map = {
+        "positive": SentimentLabel.POSITIVE,
+        "negative": SentimentLabel.NEGATIVE,
+        "neutral": SentimentLabel.NEUTRAL,
+    }
+    dropped_ids: list = []
+    kept = 0
+    for event, cls in zip(events, classifications):
+        if cls.relevance < 0.2:
+            dropped_ids.append(event.id)
+            continue
+        event.sentiment = label_map.get(cls.sentiment, SentimentLabel.NEUTRAL)
+        event.relevance_score = cls.relevance
+        event.llm_reasoning = cls.reasoning
+        # Scale current credibility by LLM confidence (don't double-shrink — clamp).
+        scaled = event.credibility_weight * (0.5 + 0.5 * cls.confidence)
+        event.credibility_weight = max(0.0, min(1.0, scaled))
+        kept += 1
+
+    if dropped_ids:
+        db.execute(delete(SentimentEvent).where(SentimentEvent.id.in_(dropped_ids)))
+
+    db.flush()
+
+    # Pull the latest signal's market_price as the prior for the regenerated signal.
+    latest_signal = db.scalar(
+        select(Signal)
+        .where(Signal.market_id == market_id)
+        .order_by(Signal.generated_at.desc())
+        .limit(1)
+    )
+    market_price = float(latest_signal.market_price) if latest_signal else 0.5
+
+    pred = predict_market(db, market, market_price)
+    edge = pred.probability - market_price
+    new_signal = Signal(
+        market_id=market.id,
+        model_probability=pred.probability,
+        confidence_interval_low=pred.ci_low,
+        confidence_interval_high=pred.ci_high,
+        market_price=market_price,
+        edge=edge,
+        signal_tier=classify_tier(edge),
+        sentiment_score=pred.sentiment_score,
+        sentiment_weight=pred.sentiment_weight,
+        stats_weight=pred.stats_weight,
+    )
+    db.add(new_signal)
+    db.commit()
+
+    return {
+        "reclassified": len(events),
+        "kept": kept,
+        "dropped": len(dropped_ids),
+        "new_signal": {
+            "model_probability": round(pred.probability, 3),
+            "edge": round(edge, 3),
+            "tier": classify_tier(edge).value,
+        },
+    }
 
 
 @router.get("/closing-line-tracking")

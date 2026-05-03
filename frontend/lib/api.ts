@@ -108,4 +108,6 @@ export const api = {
     fetch(`${API_BASE}${priority ? "/admin/refresh-priority" : "/admin/refresh"}`, {
       method: "POST",
     }).then((r) => r.json()),
+  reclassifyMarket: (id: string) =>
+    fetch(`${API_BASE}/admin/reclassify-market/${id}`, { method: "POST" }).then((r) => r.json()),
 };

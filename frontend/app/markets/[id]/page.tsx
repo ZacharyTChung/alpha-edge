@@ -1,6 +1,7 @@
 import { api, type SentimentEvent, type Signal } from "@/lib/api";
 import { InfoTip } from "@/app/components/info-tip";
 import { SignalGlossary } from "@/app/components/signal-glossary";
+import { ReclassifyButton } from "./reclassify-button";
 import { SignalChart } from "./signal-chart";
 
 export const dynamic = "force-dynamic";
@@ -35,12 +36,15 @@ export default async function MarketDetailPage({
 
   const latest: Signal | undefined = signals[0];
 
-  // Sort sentiment by relevance × credibility so the most informative events lead.
-  const ranked = [...sentiment].sort((a, b) => {
-    const ra = a.relevance_score * a.credibility_weight;
-    const rb = b.relevance_score * b.credibility_weight;
-    return rb - ra;
-  });
+  // Split LLM-classified events from VADER fallback. LLM events have
+  // llm_reasoning populated; VADER events default to relevance_score=1.0.
+  const llmEvents = sentiment
+    .filter((e) => e.llm_reasoning)
+    .sort((a, b) => b.relevance_score * b.credibility_weight - a.relevance_score * a.credibility_weight);
+  const vaderEvents = sentiment
+    .filter((e) => !e.llm_reasoning)
+    .sort((a, b) => b.credibility_weight - a.credibility_weight);
+  const showLLMOnly = llmEvents.length > 0;
 
   return (
     <section>
@@ -171,89 +175,71 @@ export default async function MarketDetailPage({
         <p>No signals generated yet for this market.</p>
       )}
 
-      <h3 style={{ marginTop: 32 }}>
-        Sentiment Evidence
-        <InfoTip>
-          Texts ranked by relevance × credibility. When the LLM is enabled, each text shows
-          Claude's per-text reasoning underneath. Texts the LLM judged irrelevant (relevance &lt; 0.2)
-          were filtered out before reaching this list.
-        </InfoTip>
-      </h3>
-      {ranked.length === 0 ? (
-        <p style={{ color: "var(--muted)" }}>No sentiment events captured yet.</p>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          marginTop: 32,
+          gap: 16,
+          flexWrap: "wrap",
+        }}
+      >
+        <h3 style={{ margin: 0 }}>
+          Sentiment Evidence
+          <InfoTip>
+            Texts ranked by relevance × credibility. Claude reads each in market context and
+            scores how directly it relates. Texts judged irrelevant (relevance &lt; 0.2) are
+            dropped before reaching this list.
+          </InfoTip>
+        </h3>
+        <ReclassifyButton marketId={market.id} />
+      </div>
+
+      {sentiment.length === 0 ? (
+        <p style={{ color: "var(--muted)", marginTop: 12 }}>No sentiment events captured yet.</p>
       ) : (
-        <table>
-          <thead>
-            <tr>
-              <th>When</th>
-              <th>Source</th>
-              <th>
-                Sentiment
-                <InfoTip>
-                  Polarity relative to the YES outcome. With LLM: Claude reads the text in
-                  market context. Without LLM (VADER fallback): rule-based polarity that
-                  doesn't understand market context — much noisier.
-                </InfoTip>
-              </th>
-              <th style={{ textAlign: "right" }}>
-                Rel
-                <InfoTip>
-                  Relevance: how directly this text relates to the specific market (0–1).
-                  Texts &lt; 0.2 were filtered. Texts &gt; 0.7 are clear, on-topic information.
-                </InfoTip>
-              </th>
-              <th style={{ textAlign: "right" }}>
-                Cred
-                <InfoTip>
-                  Credibility: source baseline (RotoWire 0.9, ESPN 0.8, Reddit 0.4) scaled by
-                  Claude's confidence on this specific text. Engagement-weighted for Bluesky
-                  and X posts.
-                </InfoTip>
-              </th>
-              <th>Snippet / LLM Reasoning</th>
-            </tr>
-          </thead>
-          <tbody>
-            {ranked.slice(0, 30).map((s) => (
-              <tr key={s.id}>
-                <td style={{ color: "var(--muted)", fontSize: 12 }}>
-                  {new Date(s.detected_at).toLocaleString()}
-                </td>
-                <td>
-                  {s.source_url ? (
-                    <a href={s.source_url} target="_blank" rel="noreferrer">
-                      {s.source}
-                    </a>
-                  ) : (
-                    s.source
-                  )}
-                </td>
-                <td className={`sentiment-${s.sentiment}`}>{s.sentiment}</td>
-                <td style={{ textAlign: "right", color: "var(--muted)" }}>
-                  {s.relevance_score.toFixed(2)}
-                </td>
-                <td style={{ textAlign: "right", color: "var(--muted)" }}>
-                  {s.credibility_weight.toFixed(2)}
-                </td>
-                <td style={{ maxWidth: 520 }}>
-                  <div>{s.raw_text.slice(0, 200)}</div>
-                  {s.llm_reasoning ? (
-                    <div
-                      style={{
-                        color: "var(--muted)",
-                        fontSize: 11,
-                        marginTop: 4,
-                        fontStyle: "italic",
-                      }}
-                    >
-                      ↳ {s.llm_reasoning}
-                    </div>
-                  ) : null}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <>
+          {showLLMOnly ? null : (
+            <p
+              style={{
+                color: "var(--warn)",
+                fontSize: 12,
+                marginTop: 8,
+                marginBottom: 0,
+              }}
+            >
+              ⚠️ All events here are VADER-fallback classifications — they were ingested before
+              the LLM ran for this market and may not align with the question. Click "Reclassify
+              with Claude" above to re-score and drop off-topic events.
+            </p>
+          )}
+
+          {llmEvents.length > 0 ? (
+            <EvidenceTable events={llmEvents.slice(0, 30)} />
+          ) : (
+            <EvidenceTable events={vaderEvents.slice(0, 30)} muted />
+          )}
+
+          {showLLMOnly && vaderEvents.length > 0 ? (
+            <details style={{ marginTop: 16 }}>
+              <summary
+                style={{
+                  cursor: "pointer",
+                  color: "var(--muted)",
+                  fontSize: 12,
+                  textTransform: "uppercase",
+                  letterSpacing: "0.05em",
+                }}
+              >
+                + show {vaderEvents.length} VADER-only events (likely lower quality)
+              </summary>
+              <div style={{ marginTop: 12 }}>
+                <EvidenceTable events={vaderEvents.slice(0, 30)} muted />
+              </div>
+            </details>
+          ) : null}
+        </>
       )}
 
       <h3 style={{ marginTop: 32 }}>Signal History</h3>
@@ -292,5 +278,62 @@ export default async function MarketDetailPage({
 
       <SignalGlossary />
     </section>
+  );
+}
+
+function EvidenceTable({ events, muted }: { events: SentimentEvent[]; muted?: boolean }) {
+  return (
+    <table style={{ marginTop: 12, opacity: muted ? 0.7 : 1 }}>
+      <thead>
+        <tr>
+          <th>When</th>
+          <th>Source</th>
+          <th>Sentiment</th>
+          <th style={{ textAlign: "right" }}>Rel</th>
+          <th style={{ textAlign: "right" }}>Cred</th>
+          <th>Snippet / LLM Reasoning</th>
+        </tr>
+      </thead>
+      <tbody>
+        {events.map((s) => (
+          <tr key={s.id}>
+            <td style={{ color: "var(--muted)", fontSize: 12 }}>
+              {new Date(s.detected_at).toLocaleString()}
+            </td>
+            <td>
+              {s.source_url ? (
+                <a href={s.source_url} target="_blank" rel="noreferrer">
+                  {s.source}
+                </a>
+              ) : (
+                s.source
+              )}
+            </td>
+            <td className={`sentiment-${s.sentiment}`}>{s.sentiment}</td>
+            <td style={{ textAlign: "right", color: "var(--muted)" }}>
+              {s.relevance_score.toFixed(2)}
+            </td>
+            <td style={{ textAlign: "right", color: "var(--muted)" }}>
+              {s.credibility_weight.toFixed(2)}
+            </td>
+            <td style={{ maxWidth: 520 }}>
+              <div>{s.raw_text.slice(0, 200)}</div>
+              {s.llm_reasoning ? (
+                <div
+                  style={{
+                    color: "var(--muted)",
+                    fontSize: 11,
+                    marginTop: 4,
+                    fontStyle: "italic",
+                  }}
+                >
+                  ↳ {s.llm_reasoning}
+                </div>
+              ) : null}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 }

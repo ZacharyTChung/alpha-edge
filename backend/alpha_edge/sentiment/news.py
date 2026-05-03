@@ -175,11 +175,16 @@ _STOPWORDS = {
 
 
 def match_terms(docs: Iterable[NewsDoc], terms: list[str]) -> list[NewsDoc]:
-    """Filter docs whose title/body references the market terms.
+    """Filter docs that strongly reference the market.
 
-    Multi-word match → always counts. Single-word match counts when the term is
-    ≥5 chars and not in the stopword list (specific enough that a hit is signal,
-    not noise). Tune _STOPWORDS to suppress false positives observed in practice.
+    Acceptance rule (in order of strength):
+      1. ≥1 multi-word term match (e.g. "Anthony Davis", "Federal Reserve") — high precision
+      2. ≥2 distinct single-word matches in the same doc (e.g. both "Lakers" and "Nuggets")
+      3. ≥1 single-word match for a sufficiently long, specific term (≥7 chars)
+
+    Single-word matches alone for short common nouns (e.g. only "Bitcoin" with no
+    other context) are dropped — those let unrelated content through, which is
+    the bug we're fixing.
     """
     if not terms:
         return []
@@ -188,12 +193,14 @@ def match_terms(docs: Iterable[NewsDoc], terms: list[str]) -> list[NewsDoc]:
         t.lower() for t in terms
         if " " not in t and len(t) >= 5 and t.lower() not in _STOPWORDS
     ]
+    long_single = [t for t in single if len(t) >= 7]
     out: list[NewsDoc] = []
     for d in docs:
         hay = f"{d.title} {d.body}".lower()
         m_hits = [n for n in multi if n in hay]
         s_hits = [n for n in single if n in hay]
-        if m_hits or s_hits:
+        long_hits = [n for n in long_single if n in hay]
+        if m_hits or len(s_hits) >= 2 or long_hits:
             d.matched_terms = m_hits + s_hits
             out.append(d)
     return out
