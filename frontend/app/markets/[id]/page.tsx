@@ -1,6 +1,7 @@
-import { api, type SentimentEvent, type Signal } from "@/lib/api";
+import { api, type MarketCalculation, type SentimentEvent, type Signal } from "@/lib/api";
 import { InfoTip } from "@/app/components/info-tip";
 import { SignalGlossary } from "@/app/components/signal-glossary";
+import { CalculationPanel } from "./calculation-panel";
 import { ReclassifyButton } from "./reclassify-button";
 import { SignalChart } from "./signal-chart";
 
@@ -14,6 +15,7 @@ export default async function MarketDetailPage({
   let market: Awaited<ReturnType<typeof api.getMarket>> | null = null;
   let signals: Signal[] = [];
   let sentiment: SentimentEvent[] = [];
+  let calc: MarketCalculation | null = null;
   let error: string | null = null;
   try {
     [market, signals, sentiment] = await Promise.all([
@@ -21,6 +23,11 @@ export default async function MarketDetailPage({
       api.getMarketSignals(params.id),
       api.getMarketSentiment(params.id),
     ]);
+    try {
+      calc = await api.getMarketCalculation(params.id);
+    } catch {
+      calc = null;
+    }
   } catch (err) {
     error = err instanceof Error ? err.message : String(err);
   }
@@ -153,6 +160,29 @@ export default async function MarketDetailPage({
                 </th>
                 <td>{latest.sentiment_score.toFixed(3)}</td>
               </tr>
+              {calc ? (
+                <tr>
+                  <th>
+                    Quarter Kelly
+                    <InfoTip>
+                      Recommended bet size as a fraction of bankroll using fractional (¼)
+                      Kelly. Formula: f* = (b·p − q) / b where b = 1/market_price − 1. ¼ Kelly
+                      is conservative — full Kelly is theoretically optimal but assumes the
+                      model probability is exactly correct.
+                    </InfoTip>
+                  </th>
+                  <td
+                    style={{
+                      color:
+                        calc.betting.quarter_kelly_pct_bankroll > 0
+                          ? "var(--accent)"
+                          : "var(--muted)",
+                    }}
+                  >
+                    {calc.betting.quarter_kelly_pct_bankroll.toFixed(2)}% of bankroll
+                  </td>
+                </tr>
+              ) : null}
             </tbody>
           </table>
 
@@ -170,6 +200,8 @@ export default async function MarketDetailPage({
               <SignalChart signals={signals} />
             </>
           ) : null}
+
+          {calc ? <CalculationPanel calc={calc} /> : null}
         </>
       ) : (
         <p>No signals generated yet for this market.</p>

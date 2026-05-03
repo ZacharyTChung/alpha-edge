@@ -87,6 +87,51 @@ export interface ClosingLineTracking {
   samples: ClosingLineSample[];
 }
 
+export interface SourceContribution {
+  source_key: string;
+  n_events: number;
+  beta_coefficient: number;
+  avg_signed_score: number;
+  raw_log_LR: number;
+  capped_log_LR: number;
+  was_capped: boolean;
+  variance_contribution: number;
+}
+
+export interface MarketCalculation {
+  market: {
+    question_text: string;
+    platform: string;
+    category: string;
+    market_price_yes: number;
+    decimal_odds_yes: number | null;
+    implied_payout_per_dollar: number | null;
+  };
+  prior: { p_market: number; log_odds: number; comment: string };
+  evidence: {
+    n_events: number;
+    delta_log_odds: number;
+    per_source: SourceContribution[];
+  };
+  posterior: {
+    log_odds: number;
+    probability: number;
+    variance_log_odds: number;
+    sigma_log_odds: number;
+    ci_95_low: number;
+    ci_95_high: number;
+  };
+  edge: { edge: number; edge_pp: number; tier: string };
+  betting: {
+    decimal_odds_yes: number | null;
+    full_kelly_fraction: number;
+    quarter_kelly_fraction: number;
+    quarter_kelly_pct_bankroll: number;
+    rule: string;
+  };
+  math_note: string;
+}
+
 async function get<T>(path: string): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, { cache: "no-store" });
   if (!response.ok) {
@@ -110,4 +155,5 @@ export const api = {
     }).then((r) => r.json()),
   reclassifyMarket: (id: string) =>
     fetch(`${API_BASE}/admin/reclassify-market/${id}`, { method: "POST" }).then((r) => r.json()),
+  getMarketCalculation: (id: string) => get<MarketCalculation>(`/markets/${id}/calculation`),
 };

@@ -116,6 +116,54 @@ const EVIDENCE_TERMS: Term[] = [
   },
 ];
 
+const MATH_TERMS: Term[] = [
+  {
+    label: "log-odds (ℓ)",
+    short: "log(p / (1 − p)) — the working unit of the model",
+    detail:
+      "Log-odds turn 'multiply by a Bayes factor' into 'add a number'. Useful range is roughly −5 to +5; ℓ=0 means p=50%, ℓ=+1 means p≈73%, ℓ=−1 means p≈27%. Adding to log-odds is equivalent to multiplying probabilities, which is the right way to combine independent evidence.",
+    range: "−∞ (p=0) to +∞ (p=1)",
+  },
+  {
+    label: "log-LR (ℓr)",
+    short: "log of the likelihood ratio for one piece of evidence",
+    detail:
+      "log(P(evidence | YES) / P(evidence | NO)). Positive ℓr nudges the posterior toward YES; negative toward NO. Adding all the ℓr from independent evidence pieces gives the total shift Δℓ that we apply to the prior log-odds.",
+  },
+  {
+    label: "β (source coefficient)",
+    short: "How much sentiment from this source actually moves probability",
+    detail:
+      "Multiplier applied to a single piece of evidence's signed score. RotoWire β=0.55 means a strongly-positive RotoWire item shifts log-odds by ~0.55 per piece. Anonymous Reddit β≈0.18 means even strong sentiment shifts log-odds by ~0.18. Defaults are hand-coded priors; once we have ≥10 resolved markets per source, β gets learned from observed accuracy via a Beta posterior.",
+    range: "0.05 – 0.85",
+  },
+  {
+    label: "x (signed score)",
+    short: "polarity × relevance × confidence",
+    detail:
+      "polarity is +1 / 0 / −1 from the sentiment label. relevance and confidence (∈ [0,1]) come from Claude. So x ∈ [−1, +1]. A clearly-relevant strongly-positive injury report scores ≈ +0.8; a vaguely-relevant lukewarm post scores ≈ +0.05.",
+    range: "−1 to +1",
+  },
+  {
+    label: "K_MAX_SOURCE = 0.8",
+    short: "Cap on any single source's log-LR contribution",
+    detail:
+      "Bounds independence-violation harm: if 17 tweets all quote the same beat reporter, they shouldn't outweigh one independent expert. Per-source contribution is clipped to ±0.8 (≈ ±19pp shift at p=0.5). When you see ✂ in the Calculation Breakdown, that source hit the cap.",
+  },
+  {
+    label: "σ (sigma)",
+    short: "Std-dev of the posterior log-odds",
+    detail:
+      "σ = √Var(ℓ_post). Each evidence piece contributes its own variance based on how 'unsure' it is (low relevance or low confidence → higher variance). The 95% credible interval is sigmoid(ℓ_post ± 1.96σ).",
+  },
+  {
+    label: "Quarter Kelly",
+    short: "Fractional Kelly bet sizing — recommended fraction of bankroll",
+    detail:
+      "Full Kelly: f* = (b·p − q) / b where b = decimal_odds − 1, p = our probability, q = 1−p. Full Kelly is theoretically optimal but punishing if your model is even slightly off. ¼ Kelly trades expected growth for variance — much safer for early-stage models like this one.",
+  },
+];
+
 const SOURCE_TERMS: Term[] = [
   {
     label: "news:rotowire",
@@ -191,6 +239,7 @@ export function SignalGlossary() {
         <div style={{ padding: "0 16px 20px" }}>
           <Section title="Signal Tiers" terms={TIER_TERMS} kind="tier" />
           <Section title="Latest Signal Metrics" terms={SIGNAL_TERMS} />
+          <Section title="Math Symbols" terms={MATH_TERMS} />
           <Section title="Sentiment Evidence Fields" terms={EVIDENCE_TERMS} />
           <Section title="Sources" terms={SOURCE_TERMS} compact />
         </div>
