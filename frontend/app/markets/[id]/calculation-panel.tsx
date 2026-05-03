@@ -145,19 +145,25 @@ export function CalculationPanel({ calc }: { calc: MarketCalculation }) {
         </Code>
       </Row>
 
-      <Row label="6. Quarter-Kelly bet sizing">
-        <Code>b = 1/p_market − 1 = {fmt(1 / prior.p_market - 1, 3)} (decimal odds payoff)</Code>
+      <Row label="6. Half-Kelly bet sizing (capped 3%)">
+        <Code>b = 1/p_market − 1 = {fmt(betting.b, 3)} (decimal odds payoff)</Code>
         <Code>
-          f* = (b·p − q) / b = ({fmt(1 / prior.p_market - 1, 3)} ·{" "}
-          {fmt(posterior.probability, 4)} − {fmt(1 - posterior.probability, 4)}) /{" "}
-          {fmt(1 / prior.p_market - 1, 3)} = {fmt(betting.full_kelly_fraction, 4)}
+          f* = (b·p − q) / b = ({fmt(betting.b, 3)} · {fmt(posterior.probability, 4)} −{" "}
+          {fmt(1 - posterior.probability, 4)}) / {fmt(betting.b, 3)} ={" "}
+          {fmt(betting.full_kelly_fraction, 4)}
         </Code>
+        <Code>½ Kelly = {fmt(betting.half_kelly_fraction, 4)}</Code>
         <Code>
-          recommended (¼ Kelly) ={" "}
+          capped at 3% →{" "}
           <strong style={{ color: "var(--accent)" }}>
-            {betting.quarter_kelly_pct_bankroll.toFixed(2)}%
+            {betting.capped_pct_bankroll.toFixed(2)}%
           </strong>{" "}
           of bankroll
+          {betting.was_capped_at_3pct ? (
+            <span style={{ color: "var(--warn)", marginLeft: 8 }}>
+              ✂ capped (raw ½-Kelly was {(betting.half_kelly_fraction * 100).toFixed(1)}%)
+            </span>
+          ) : null}
         </Code>
       </Row>
     </section>

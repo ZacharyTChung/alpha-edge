@@ -29,41 +29,53 @@ from __future__ import annotations
 from threading import Lock
 from typing import Iterable
 
-# Hand-coded predictive coefficients. β = expected log-LR shift per unit of
-# signed sentiment score. Calibrated so RotoWire's strongest possible signal
-# (s=+1, perfect relevance & confidence) shifts log-odds by +0.55 ≈ +13pp at
-# p=0.5. β=0.10 (anonymous Reddit) shifts by ≈ +2pp.
+# Tier-aligned predictive coefficients per v2.0 source spec.
+#
+# v2.0 tier weights (1.00 / 0.90 / 0.75 / 0.40) are normalized to log-LR shifts:
+#   Tier 1 → β = 0.80   (~+18pp posterior shift at p=0.5 from one strong signal)
+#   Tier 2 → β = 0.65
+#   Tier 3 → β = 0.50
+#   Tier 4 → β = 0.25
 PRIOR_BETA: dict[str, float] = {
-    # Sports beat reporters (highest credibility on injury / lineup news)
+    # ── TIER 1: official team / league sources ────────────────────────────
+    # (we don't currently scrape NBA injury report directly; once we do,
+    #  add e.g. "nba:injury_report" → 0.80 here)
+
+    # ── TIER 2: insider beat reporters (β = 0.65) ─────────────────────────
     "x:shamscharania": 0.65,
-    "x:windhorstespn": 0.55,
     "x:adamschefter": 0.65,
-    "x:ken_rosenthal": 0.60,
-    "x:chrisbhaynes": 0.50,
-    "x:marcjspears": 0.50,
-    # Specialist sports wires
-    "news:rotowire": 0.55,
+    "x:windhorstespn": 0.65,
+    "x:chrisbhaynes": 0.65,
+    "x:ken_rosenthal": 0.65,
+    "x:marcjspears": 0.65,
+
+    # ── TIER 3: established sports media (β = 0.50) ───────────────────────
+    "news:rotowire": 0.55,           # specialist injury wire — slight bonus
     "news:athletic": 0.50,
-    # Mainstream sports media
-    "news:espn": 0.40,
-    "news:espn-api": 0.40,
-    "news:cbs": 0.35,
-    "news:yahoo": 0.35,
-    # Targeted query results — credibility depends on the underlying publisher
-    # but we don't know it without parsing each title; assume modest baseline.
-    "news:google": 0.30,
-    # Finance / political markets
-    "news:hn": 0.40,  # high-engagement HN stories tend to have substance
-    # Reddit communities
-    "reddit:nba": 0.18,
-    "reddit:nfl": 0.18,
-    "reddit:soccer": 0.18,
-    "reddit:sportsbook": 0.20,  # sharper than r/nba but still anonymous
-    "reddit:kalshimarkets": 0.15,
-    "reddit:wallstreetbets": 0.10,
-    # Bluesky — varies wildly; engagement-weighted upstream, modest base here
-    "bluesky:default": 0.18,
-    # Catch-all
+    "news:espn": 0.50,
+    "news:espn-api": 0.50,
+    "news:cbs": 0.45,
+    "news:yahoo": 0.45,
+
+    # ── Targeted aggregators (β = 0.30) ───────────────────────────────────
+    # Google News headlines come from any publisher — assume Tier 3-ish baseline,
+    # discounted because we don't parse the underlying publisher reliably.
+    "news:google": 0.35,
+    "news:hn": 0.40,                 # high-engagement HN posts tend to have substance
+
+    # ── TIER 4: community consensus (β = 0.25) ────────────────────────────
+    "reddit:sportsbook": 0.25,       # sharpest community
+    "reddit:nba": 0.20,
+    "reddit:nfl": 0.20,
+    "reddit:mlb": 0.20,
+    "reddit:soccer": 0.20,
+    "reddit:nhl": 0.20,
+    "reddit:kalshimarkets": 0.18,
+    "reddit:wallstreetbets": 0.12,
+    # Bluesky engagement-weighted upstream; treat as Tier 4 baseline here
+    "bluesky:default": 0.22,
+
+    # Catch-all (anonymous, unverified)
     "default": 0.15,
 }
 

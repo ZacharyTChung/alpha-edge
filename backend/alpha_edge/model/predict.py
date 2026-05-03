@@ -315,11 +315,7 @@ def predict_market_id(db: Session, market_id: UUID, market_price: float) -> Pred
 
 
 def kelly_fraction_quarter(p_post: float, market_price: float) -> float:
-    """Quarter-Kelly fraction of bankroll at the market price.
-
-    f* = (b·p − q) / b ;  b = 1/price − 1
-    Returns 0 for negative-edge bets.
-    """
+    """Quarter-Kelly fraction (legacy alias). Prefer half_kelly_capped."""
     if not 0.0 < market_price < 1.0 or not 0.0 < p_post < 1.0:
         return 0.0
     b = (1.0 / market_price) - 1.0

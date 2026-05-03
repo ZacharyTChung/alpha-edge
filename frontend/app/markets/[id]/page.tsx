@@ -2,6 +2,8 @@ import { api, type MarketCalculation, type SentimentEvent, type Signal } from "@
 import { InfoTip } from "@/app/components/info-tip";
 import { SignalGlossary } from "@/app/components/signal-glossary";
 import { CalculationPanel } from "./calculation-panel";
+import { DecisionCard } from "./decision-card";
+import { PlayerPropPanel } from "./player-prop-panel";
 import { ReclassifyButton } from "./reclassify-button";
 import { SignalChart } from "./signal-chart";
 
@@ -61,6 +63,8 @@ export default async function MarketDetailPage({
         {market.liquidity > 0 ? `$${market.liquidity.toLocaleString()}` : "—"} · closes{" "}
         {new Date(market.close_time).toLocaleString()}
       </p>
+
+      {calc?.decision ? <DecisionCard decision={calc.decision} /> : null}
 
       {latest ? (
         <>
@@ -163,23 +167,28 @@ export default async function MarketDetailPage({
               {calc ? (
                 <tr>
                   <th>
-                    Quarter Kelly
+                    Half Kelly (capped 3%)
                     <InfoTip>
-                      Recommended bet size as a fraction of bankroll using fractional (¼)
-                      Kelly. Formula: f* = (b·p − q) / b where b = 1/market_price − 1. ¼ Kelly
-                      is conservative — full Kelly is theoretically optimal but assumes the
-                      model probability is exactly correct.
+                      Per Alpha Edge v2.0 spec: half-Kelly bet size hard-capped at 3% of
+                      bankroll. Half-Kelly trades expected growth for variance protection;
+                      the 3% cap kicks in when the model's edge is so large that uncapped
+                      Kelly would risk too much (often a sign the model is overconfident).
+                      Formula: f* = (b·p − q) / b where b = 1/market_price − 1; recommend
+                      ½·f* clipped at 0.03.
                     </InfoTip>
                   </th>
                   <td
                     style={{
                       color:
-                        calc.betting.quarter_kelly_pct_bankroll > 0
-                          ? "var(--accent)"
-                          : "var(--muted)",
+                        calc.betting.capped_pct_bankroll > 0 ? "var(--accent)" : "var(--muted)",
                     }}
                   >
-                    {calc.betting.quarter_kelly_pct_bankroll.toFixed(2)}% of bankroll
+                    {calc.betting.capped_pct_bankroll.toFixed(2)}% of bankroll
+                    {calc.betting.was_capped_at_3pct ? (
+                      <span style={{ color: "var(--warn)", marginLeft: 8, fontSize: 11 }}>
+                        (capped from {(calc.betting.half_kelly_fraction * 100).toFixed(1)}%)
+                      </span>
+                    ) : null}
                   </td>
                 </tr>
               ) : null}
@@ -199,6 +208,10 @@ export default async function MarketDetailPage({
               </h3>
               <SignalChart signals={signals} />
             </>
+          ) : null}
+
+          {calc?.player_prop?.is_player_prop ? (
+            <PlayerPropPanel prop={calc.player_prop} />
           ) : null}
 
           {calc ? <CalculationPanel calc={calc} /> : null}

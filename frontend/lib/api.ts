@@ -98,6 +98,38 @@ export interface SourceContribution {
   variance_contribution: number;
 }
 
+export interface DecisionInfo {
+  decision: "BET_OVER" | "BET_UNDER" | "NO_BET";
+  risk_level: "LOW" | "MEDIUM" | "HIGH";
+  confidence: number;
+  confidence_floor: number;
+  deductions: string[];
+  bonuses: string[];
+  flags: Record<string, boolean>;
+  reasoning: string;
+}
+
+export interface PlayerPropInfo {
+  is_player_prop: boolean;
+  parsed: {
+    player_name: string | null;
+    prop_type: string | null;
+    line: number | null;
+    side: "over" | "under";
+  };
+  base_projection?: number;
+  projected_mean?: number;
+  adjusted_sd?: number;
+  z_score?: number;
+  model_prob_over?: number;
+  model_prob_under?: number;
+  n_games_used?: number;
+  sd_source?: string;
+  flags?: Record<string, boolean>;
+  adjustments?: Array<{ name: string; value: number; note: string }>;
+  error?: string;
+}
+
 export interface MarketCalculation {
   market: {
     question_text: string;
@@ -124,11 +156,16 @@ export interface MarketCalculation {
   edge: { edge: number; edge_pp: number; tier: string };
   betting: {
     decimal_odds_yes: number | null;
+    b: number;
     full_kelly_fraction: number;
-    quarter_kelly_fraction: number;
-    quarter_kelly_pct_bankroll: number;
+    half_kelly_fraction: number;
+    capped_fraction: number;
+    capped_pct_bankroll: number;
+    was_capped_at_3pct: boolean;
     rule: string;
   };
+  decision: DecisionInfo;
+  player_prop: PlayerPropInfo | null;
   math_note: string;
 }
 

@@ -5,8 +5,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from alpha_edge.db import get_session
-from alpha_edge.db.models import Market, Signal
-from alpha_edge.model.predict import kelly_fraction_quarter, predict_market
+from alpha_edge.db.models import Market, SentimentEvent, Signal
+from alpha_edge.model.decision import make_decision
+from alpha_edge.model.kelly import half_kelly_capped
+from alpha_edge.model.player_prop import is_player_prop, parse_prop_question, project
+from alpha_edge.model.predict import predict_market
 from alpha_edge.schemas import MarketOut
 
 router = APIRouter(prefix="/markets", tags=["markets"])
@@ -54,8 +57,58 @@ def get_calculation(market_id: UUID, db: Session = Depends(get_session)) -> dict
     pred = predict_market(db, market, market_price)
 
     edge = pred.probability - market_price
-    kelly = kelly_fraction_quarter(pred.probability, market_price)
+    kelly = half_kelly_capped(pred.probability, market_price)
     decimal_odds = (1.0 / market_price) if market_price > 0 else None
+
+    events = list(
+        db.scalars(
+            select(SentimentEvent)
+            .where(SentimentEvent.market_id == market_id)
+            .order_by(SentimentEvent.detected_at.desc())
+            .limit(50)
+        )
+    )
+    decision_result = make_decision(pred, market_price, events)
+
+    # Player-prop projection (only populated when the market is a detected prop)
+    prop_block: dict | None = None
+    if is_player_prop(market.question_text):
+        parse = parse_prop_question(market.question_text)
+        proj = project(parse)
+        if proj:
+            prop_block = {
+                "is_player_prop": True,
+                "parsed": {
+                    "player_name": parse.player_name,
+                    "prop_type": parse.prop_type,
+                    "line": parse.line,
+                    "side": parse.side,
+                },
+                "base_projection": round(proj.base, 2),
+                "projected_mean": round(proj.projected_mean, 2),
+                "adjusted_sd": round(proj.adjusted_sd, 2),
+                "z_score": round(proj.z_score, 3),
+                "model_prob_over": round(proj.prob_over, 4),
+                "model_prob_under": round(proj.prob_under, 4),
+                "n_games_used": proj.n_games_used,
+                "sd_source": proj.sd_source,
+                "flags": proj.flags,
+                "adjustments": [
+                    {"name": a.name, "value": round(a.value, 2), "note": a.note}
+                    for a in proj.adjustments
+                ],
+            }
+        else:
+            prop_block = {
+                "is_player_prop": True,
+                "parsed": {
+                    "player_name": parse.player_name,
+                    "prop_type": parse.prop_type,
+                    "line": parse.line,
+                    "side": parse.side,
+                },
+                "error": "No gamelog data — player not in BBRef slug map or gamelog empty.",
+            }
 
     return {
         "market": {
@@ -103,15 +156,30 @@ def get_calculation(market_id: UUID, db: Session = Depends(get_session)) -> dict
         },
         "betting": {
             "decimal_odds_yes": round(decimal_odds, 3) if decimal_odds else None,
-            "full_kelly_fraction": round(kelly * 4, 4) if kelly > 0 else 0.0,
-            "quarter_kelly_fraction": round(kelly, 4),
-            "quarter_kelly_pct_bankroll": round(kelly * 100, 2),
-            "rule": "f* = (b·p − q) / b ; b = 1/price − 1 ; recommend ¼·f*",
+            "b": round(kelly["b"], 3),
+            "full_kelly_fraction": round(kelly["full_kelly"], 4),
+            "half_kelly_fraction": round(kelly["half_kelly"], 4),
+            "capped_fraction": round(kelly["capped"], 4),
+            "capped_pct_bankroll": round(kelly["capped"] * 100, 2),
+            "was_capped_at_3pct": kelly["was_capped"],
+            "rule": "f* = (b·p − q) / b ; b = 1/price − 1 ; recommend ½·f* capped at 3% of bankroll",
         },
+        "decision": {
+            "decision": decision_result.decision,
+            "risk_level": decision_result.risk_level,
+            "confidence": decision_result.confidence,
+            "confidence_floor": 7,
+            "deductions": decision_result.confidence_breakdown.deductions,
+            "bonuses": decision_result.confidence_breakdown.bonuses,
+            "flags": decision_result.confidence_breakdown.flags,
+            "reasoning": decision_result.reasoning,
+        },
+        "player_prop": prop_block,
         "math_note": (
             "posterior_log_odds = log_odds(market_price) + Σ_source clip(Σ β·x, ±0.8). "
             "x = polarity × relevance × confidence. β is per-source predictive coefficient. "
-            "ci_95 = sigmoid(post ± 1.96·σ); Var(σ²) = Σ per-evidence variance."
+            "ci_95 = sigmoid(post ± 1.96·σ); Var(σ²) = Σ per-evidence variance. "
+            "Decision: BET if |edge| ≥ 5pp AND confidence ≥ 7; else NO_BET."
         ),
     }
 

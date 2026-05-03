@@ -132,11 +132,15 @@ def match_player(question_text: str) -> tuple[str, str] | None:
     return None
 
 
-_PTS_RE = re.compile(r'data-stat="pts"\s*>(\d+)<')
-_REB_RE = re.compile(r'data-stat="trb"\s*>(\d+)<')
-_AST_RE = re.compile(r'data-stat="ast"\s*>(\d+)<')
-_MIN_RE = re.compile(r'data-stat="mp"\s*>(\d+):(\d+)<')
-_DATE_RE = re.compile(r'data-stat="date_game"[^>]*>(?:<a[^>]*>)?(\d{4}-\d{2}-\d{2})')
+# BBRef changed data-stat keys post-2024; current schema uses "date" (not date_game),
+# "trb_per_game" or "trb" depending on the page, and game_location for home/away.
+_PTS_RE = re.compile(r'data-stat="pts"[^>]*>(\d+)<')
+_REB_RE = re.compile(r'data-stat="trb"[^>]*>(\d+)<')
+_AST_RE = re.compile(r'data-stat="ast"[^>]*>(\d+)<')
+_MIN_RE = re.compile(r'data-stat="mp"[^>]*>(\d+):(\d+)<')
+_DATE_RE = re.compile(r'data-stat="date"[^>]*>(?:<a[^>]*>)?(\d{4}-\d{2}-\d{2})')
+_OPP_RE = re.compile(r'data-stat="opp_name_abbr"[^>]*>(?:<a[^>]*>)?([A-Z]{2,4})')
+_LOC_RE = re.compile(r'data-stat="game_location"[^>]*>([@H]?)<')
 
 
 def recent_gamelog(slug: str, season: int = CURRENT_SEASON, limit: int = 10) -> list[GameRow]:
@@ -157,27 +161,43 @@ def recent_gamelog(slug: str, season: int = CURRENT_SEASON, limit: int = 10) -> 
     except Exception:
         return list(cached[1])[:limit] if cached else []
 
-    pts = _PTS_RE.findall(html)
-    reb = _REB_RE.findall(html)
-    ast = _AST_RE.findall(html)
-    mins = _MIN_RE.findall(html)
-    dates = _DATE_RE.findall(html)
-    n = min(len(pts), len(reb), len(ast), len(mins), len(dates))
-
+    # Row-based parse: only count <tr> rows that are actual game logs
+    # (id starts with `player_game_log`). This skips summary, career-total,
+    # and league-average rows that otherwise pollute the data.
     rows: list[GameRow] = []
-    for i in range(n):
+    row_pat = re.compile(
+        r'<tr [^>]*id="player_game_log[^"]*"[^>]*>(.*?)</tr>',
+        re.DOTALL,
+    )
+    for row_html in row_pat.findall(html):
         try:
-            m, s = mins[i]
-            minutes_played = int(m) + int(s) / 60.0
+            pm = _PTS_RE.search(row_html)
+            rm = _REB_RE.search(row_html)
+            am = _AST_RE.search(row_html)
+            mm = _MIN_RE.search(row_html)
+            dm = _DATE_RE.search(row_html)
+            if not (pm and rm and am and mm and dm):
+                continue
+            points = int(pm.group(1))
+            rebounds = int(rm.group(1))
+            assists = int(am.group(1))
+            # Sanity guard against malformed rows (NBA single-game records:
+            # most points 100, rebounds 55, assists 30).
+            if points > 100 or rebounds > 55 or assists > 30:
+                continue
+            mins_part, secs_part = mm.group(1), mm.group(2)
+            minutes_played = int(mins_part) + int(secs_part) / 60.0
+            opp_match = _OPP_RE.search(row_html)
+            loc_match = _LOC_RE.search(row_html)
             rows.append(
                 GameRow(
-                    date=dates[i],
-                    opponent="",
-                    home_away="",
+                    date=dm.group(1),
+                    opponent=opp_match.group(1) if opp_match else "",
+                    home_away="away" if loc_match and loc_match.group(1) == "@" else "home",
                     minutes=round(minutes_played, 1),
-                    points=int(pts[i]),
-                    rebounds=int(reb[i]),
-                    assists=int(ast[i]),
+                    points=points,
+                    rebounds=rebounds,
+                    assists=assists,
                     fg_pct=0.0,
                     plus_minus=0,
                 )
