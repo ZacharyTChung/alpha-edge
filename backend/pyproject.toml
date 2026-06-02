@@ -30,6 +30,7 @@ dependencies = [
     "playwright>=1.46",
     "tweepy>=4.14",
     "praw>=7.7",
+    "vaderSentiment>=3.3.2",
 ]
 
 [project.optional-dependencies]
