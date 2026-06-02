@@ -7,8 +7,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from alpha_edge.db.models import (
+    Category,
     Market,
-    Platform,
     SentimentEvent,
     SentimentLabel,
     SentimentSource,
@@ -18,7 +18,6 @@ from alpha_edge.ingestion import basketball_ref as bbref_mod
 from alpha_edge.ingestion import kalshi as kalshi_client
 from alpha_edge.ingestion import polymarket as poly_client
 from alpha_edge.model.predict import predict_market, write_signal
-from alpha_edge.db.models import Category
 from alpha_edge.sentiment import bluesky as bsky_mod
 from alpha_edge.sentiment import hn as hn_mod
 from alpha_edge.sentiment import llm as llm_mod
@@ -82,7 +81,11 @@ def _upsert_market(db: Session, market_row: Market, latest_price: float) -> tupl
     return existing, latest_price
 
 
-def poll_polymarket_markets(db: Session, summary: RefreshSummary, limit: int = 50) -> list[tuple[Market, float]]:
+def poll_polymarket_markets(
+    db: Session,
+    summary: RefreshSummary,
+    limit: int = 50,
+) -> list[tuple[Market, float]]:
     items = poly_client.fetch_active_markets(limit=limit, min_volume=100.0)
     out: list[tuple[Market, float]] = []
     for item in items:
@@ -96,7 +99,11 @@ def poll_polymarket_markets(db: Session, summary: RefreshSummary, limit: int = 5
     return out
 
 
-def poll_kalshi_markets(db: Session, summary: RefreshSummary, limit: int = 50) -> list[tuple[Market, float]]:
+def poll_kalshi_markets(
+    db: Session,
+    summary: RefreshSummary,
+    limit: int = 50,
+) -> list[tuple[Market, float]]:
     items = kalshi_client.fetch_active_markets(limit=limit)
     out: list[tuple[Market, float]] = []
     for item in items:
@@ -204,7 +211,9 @@ def _dedupe_candidates(candidates: list[dict]) -> list[dict]:
             best_by_text[text] = candidate
             order.append(text)
             continue
-        if float(candidate.get("base_credibility", 0.0)) > float(existing.get("base_credibility", 0.0)):
+        if float(candidate.get("base_credibility", 0.0)) > float(
+            existing.get("base_credibility", 0.0)
+        ):
             best_by_text[text] = candidate
     return [best_by_text[key] for key in order]
 
@@ -364,7 +373,7 @@ def scrape_sentiment(
 
         if classifications and len(classifications) == len(candidates):
             summary.llm_classifications += len(classifications)
-            for c, cls in zip(candidates, classifications):
+            for c, cls in zip(candidates, classifications, strict=True):
                 if cls.relevance < 0.2:
                     continue  # LLM said this isn't actually about the market
                 # Final credibility = source baseline scaled by LLM confidence.
@@ -532,7 +541,7 @@ def scrape_sentiment_priority(
 
         if classifications and len(classifications) == len(candidates):
             summary.llm_classifications += len(classifications)
-            for c, cls in zip(candidates, classifications):
+            for c, cls in zip(candidates, classifications, strict=True):
                 if cls.relevance < 0.2:
                     continue
                 final_cred = c["base_credibility"] * (0.5 + 0.5 * cls.confidence)

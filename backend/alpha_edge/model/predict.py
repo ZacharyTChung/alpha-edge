@@ -42,9 +42,9 @@ from __future__ import annotations
 
 import math
 import random
-from hashlib import sha256
 from collections import defaultdict
 from dataclasses import dataclass, field
+from hashlib import sha256
 from uuid import UUID
 
 from sqlalchemy import select
@@ -181,7 +181,8 @@ def predict_market(
     # 2. For each source, sum signed log-LR contributions and clip
     contributions: list[SourceContribution] = []
     delta_lo = 0.0
-    variance = SIGMA_PRIOR_BASELINE ** 2 * 0.04  # tiny prior variance — most uncertainty comes from evidence
+    variance = SIGMA_PRIOR_BASELINE ** 2 * 0.04
+    # Tiny prior variance — most uncertainty comes from evidence.
     score_sum_for_display = 0.0
     weight_for_display = 0.0
     for key, evs in by_source.items():
@@ -195,7 +196,10 @@ def predict_market(
             # Variance of a single log-LR: scales with how *unsure* we are.
             # When relevance=1 and novelty=1, the term is fully known → variance ≈ 0.
             # When relevance or novelty is low, variance grows toward β².
-            unsureness = 1.0 - max(0.0, min(1.0, ev.relevance_score)) * max(0.0, min(1.0, ev.novelty_score))
+            unsureness = 1.0 - (
+                max(0.0, min(1.0, ev.relevance_score))
+                * max(0.0, min(1.0, ev.novelty_score))
+            )
             var_source += (beta * (0.3 + 0.7 * unsureness)) ** 2
             signed_sum += x
             score_sum_for_display += x * float(ev.credibility_weight)
