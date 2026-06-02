@@ -87,10 +87,9 @@ export default async function MarketDetailPage({
                 <th>
                   Confidence interval
                   <InfoTip>
-                    Heuristic range around the model probability. Width scales with √(evidence
-                    count) and dispersion across sources. Narrow CI = lots of consistent
-                    evidence; wide CI = few or contradictory data points. Phase 2 will replace
-                    this with proper Monte Carlo over component distributions.
+                    Monte Carlo range around the model probability. The interval samples the
+                    posterior log-odds distribution, so narrow CI = lots of consistent evidence;
+                    wide CI = few or contradictory data points.
                   </InfoTip>
                 </th>
                 <td>

@@ -187,6 +187,28 @@ def _build_search_query(terms: list[str]) -> str:
     return " ".join(parts)
 
 
+def _dedupe_candidates(candidates: list[dict]) -> list[dict]:
+    """Collapse exact/near-exact duplicate snippets before classification.
+
+    When the same syndicated article appears from multiple feeds, we keep the
+    most credible copy and drop the rest to avoid overweighting repeated text.
+    """
+    best_by_text: dict[str, dict] = {}
+    order: list[str] = []
+    for candidate in candidates:
+        text = " ".join((candidate.get("text") or "").split()).strip().lower()
+        if not text:
+            continue
+        existing = best_by_text.get(text)
+        if existing is None:
+            best_by_text[text] = candidate
+            order.append(text)
+            continue
+        if float(candidate.get("base_credibility", 0.0)) > float(existing.get("base_credibility", 0.0)):
+            best_by_text[text] = candidate
+    return [best_by_text[key] for key in order]
+
+
 def scrape_sentiment(
     db: Session,
     summary: RefreshSummary,
@@ -318,6 +340,7 @@ def scrape_sentiment(
             })
             summary.x_syndication_events += 1
 
+        candidates = _dedupe_candidates(candidates)
         if not candidates:
             continue
 
@@ -488,6 +511,7 @@ def scrape_sentiment_priority(
                 "base_credibility": credibility_for(src_key),
             })
 
+        candidates = _dedupe_candidates(candidates)
         if not candidates:
             continue
 

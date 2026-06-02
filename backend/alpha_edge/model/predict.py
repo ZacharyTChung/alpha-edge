@@ -41,6 +41,8 @@ table — see `sentiment/credibility.py`.
 from __future__ import annotations
 
 import math
+import random
+from hashlib import sha256
 from collections import defaultdict
 from dataclasses import dataclass, field
 from uuid import UUID
@@ -103,6 +105,29 @@ def _signed_score(label: SentimentLabel, relevance: float, confidence_proxy: flo
     r = max(0.0, min(1.0, float(relevance)))
     c = max(0.0, min(1.0, float(confidence_proxy)))
     return polarity * r * c
+
+
+def _monte_carlo_credible_interval(
+    posterior_log_odds: float,
+    sigma_log_odds: float,
+    samples: int = 4096,
+) -> tuple[float, float]:
+    """Estimate a 95% interval by sampling posterior log-odds.
+
+    This keeps the interval stable for the UI while moving the implementation
+    away from a purely analytic +/- 1.96σ shortcut.
+    """
+    if sigma_log_odds <= 0:
+        p = from_log_odds(posterior_log_odds)
+        return p, p
+
+    seed_bytes = sha256(f"{posterior_log_odds:.6f}:{sigma_log_odds:.6f}:{samples}".encode())
+    rng = random.Random(int.from_bytes(seed_bytes.digest()[:8], "big"))
+    draws = [from_log_odds(rng.gauss(posterior_log_odds, sigma_log_odds)) for _ in range(samples)]
+    draws.sort()
+    low_idx = max(0, int(0.025 * (samples - 1)))
+    high_idx = min(samples - 1, int(0.975 * (samples - 1)))
+    return draws[low_idx], draws[high_idx]
 
 
 def predict_market(
@@ -194,8 +219,7 @@ def predict_market(
     posterior_lo = prior_lo + delta_lo
     posterior_p = from_log_odds(posterior_lo)
 
-    ci_low = from_log_odds(posterior_lo - 1.96 * sigma)
-    ci_high = from_log_odds(posterior_lo + 1.96 * sigma)
+    ci_low, ci_high = _monte_carlo_credible_interval(posterior_lo, sigma)
 
     # Backward-compat display fields (sentiment_weight has no algorithmic meaning
     # under the new math but the schema still expects it). Express it as the
@@ -232,50 +256,61 @@ def _source_key(ev: SentimentEvent) -> str:
       2. Use the entity field if it already contains a `prefix:slug` shape.
       3. Fall back to the bare source enum value.
     """
-    url = (ev.source_url or "").lower()
+    from urllib.parse import urlparse
+
+    url = (ev.source_url or "").strip()
     src = ev.source.value
     if url:
+        try:
+            parsed = urlparse(url)
+            host = (parsed.netloc or "").lower()
+            path = (parsed.path or "").lower()
+        except Exception:
+            host = url.lower()
+            path = ""
+
         # News domain mapping
-        if "rotowire.com" in url:
+        if "rotowire.com" in host:
             return "news:rotowire"
-        if "espn.com" in url or "site.api.espn.com" in url:
+        if "espn.com" in host or "site.api.espn.com" in host:
             return "news:espn"
-        if "cbssports.com" in url:
+        if "cbssports.com" in host:
             return "news:cbs"
-        if "yahoo.com" in url:
+        if "yahoo.com" in host:
             return "news:yahoo"
-        if "news.google.com" in url:
+        if "news.google.com" in host or "google.com" in host:
             return "news:google"
-        if "ycombinator.com" in url or "news.ycombinator.com" in url:
+        if "ycombinator.com" in host or "news.ycombinator.com" in host:
             return "news:hn"
-        if "theathletic.com" in url:
+        if "theathletic.com" in host:
             return "news:athletic"
+
         # Reddit subreddit
-        if "reddit.com/r/" in url:
+        if "reddit.com" in host and "/r/" in path:
             try:
-                sub = url.split("reddit.com/r/")[1].split("/")[0]
+                sub = path.split("/r/")[1].split("/")[0]
                 return f"reddit:{sub}"
             except Exception:
                 return "reddit:default"
-        # Bluesky / X
-        if "bsky.app" in url:
-            handle = ""
+
+        # Bluesky handle
+        if "bsky.app" in host and "/profile/" in path:
             try:
-                handle = url.split("bsky.app/profile/")[1].split("/")[0]
+                handle = path.split("/profile/")[1].split("/")[0]
+                return f"bluesky:{handle}"
             except Exception:
-                pass
-            return f"bluesky:{handle}" if handle else "bluesky:default"
-        if "x.com/" in url or "twitter.com/" in url:
-            handle = ""
+                return "bluesky:default"
+
+        # X / Twitter handle
+        if "x.com" in host or "twitter.com" in host:
             try:
-                handle = (
-                    url.split("x.com/")[1].split("/")[0]
-                    if "x.com/" in url
-                    else url.split("twitter.com/")[1].split("/")[0]
-                )
+                # path like '/username/status/12345' or '/username'
+                parts = [p for p in path.split("/") if p]
+                if parts:
+                    handle = parts[0]
+                    return f"x:{handle}"
             except Exception:
-                pass
-            return f"x:{handle}" if handle else "x:default"
+                return "x:default"
 
     entity = (ev.entity or "").strip().lower()
     head = entity.split(",")[0].strip() if entity else ""
