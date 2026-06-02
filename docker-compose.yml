@@ -50,6 +50,7 @@ services:
       context: ./frontend
     environment:
       NEXT_PUBLIC_API_BASE: http://localhost:8000
+      ADMIN_API_KEY: ${ADMIN_API_KEY:-}
     ports:
       - "3000:3000"
     depends_on:

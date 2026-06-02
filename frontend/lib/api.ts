@@ -1,3 +1,5 @@
+import { adminHeaders, backendAdminUrl } from "./admin-proxy";
+
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000";
 
 export type SignalTier = "STRONG" | "LEAN" | "NONE" | "FADE";
@@ -188,12 +190,21 @@ export const api = {
     get<EdgeReportItem[]>(`/edge-report?min_edge=${minEdge}&limit=200`),
   getMarketSentiment: (id: string) => get<SentimentEvent[]>(`/markets/${id}/sentiment`),
   getStats: () => get<DashboardStats>("/stats"),
-  getClosingLine: () => get<ClosingLineTracking>("/admin/closing-line-tracking"),
+  getClosingLine: async () => {
+    const response = await fetch(backendAdminUrl("/admin/closing-line-tracking"), {
+      cache: "no-store",
+      headers: adminHeaders(),
+    });
+    if (!response.ok) {
+      throw new Error(`${response.status} ${response.statusText}`);
+    }
+    return response.json() as Promise<ClosingLineTracking>;
+  },
   refresh: (priority = false) =>
-    fetch(`${API_BASE}${priority ? "/admin/refresh-priority" : "/admin/refresh"}`, {
+    fetch(`/api/admin/${priority ? "refresh-priority" : "refresh"}`, {
       method: "POST",
     }).then((r) => r.json()),
   reclassifyMarket: (id: string) =>
-    fetch(`${API_BASE}/admin/reclassify-market/${id}`, { method: "POST" }).then((r) => r.json()),
+    fetch(`/api/admin/reclassify-market/${id}`, { method: "POST" }).then((r) => r.json()),
   getMarketCalculation: (id: string) => get<MarketCalculation>(`/markets/${id}/calculation`),
 };

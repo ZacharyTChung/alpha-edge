@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
+from alpha_edge.auth import require_admin_api_key
 from alpha_edge.db import get_session
 from alpha_edge.db.models import Market, Outcome, SentimentEvent, SentimentLabel, Signal
 from alpha_edge.ingestion import basketball_ref as bbref_mod
@@ -15,7 +16,11 @@ from alpha_edge.model.predict import predict_market
 from alpha_edge.sentiment import llm as llm_mod
 from alpha_edge.workers.tasks import refresh_all, refresh_priority
 
-router = APIRouter(prefix="/admin", tags=["admin"])
+router = APIRouter(
+    prefix="/admin",
+    tags=["admin"],
+    dependencies=[Depends(require_admin_api_key)],
+)
 
 
 @router.post("/refresh")
@@ -116,7 +121,7 @@ def reclassify_market(market_id: UUID, db: Session = Depends(get_session)) -> di
     }
     dropped_ids: list = []
     kept = 0
-    for event, cls in zip(events, classifications):
+    for event, cls in zip(events, classifications, strict=True):
         if cls.relevance < 0.2:
             dropped_ids.append(event.id)
             continue

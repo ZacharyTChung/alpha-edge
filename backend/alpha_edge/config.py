@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     reddit_user_agent: str = "AlphaEdge/0.1"
 
     alert_webhook_default_url: str | None = None
+    admin_api_key: str | None = None
 
     anthropic_api_key: str | None = None
     anthropic_sentiment_model: str = "claude-sonnet-4-6"
