@@ -19,9 +19,17 @@ router = APIRouter(prefix="/markets", tags=["markets"])
 def list_markets(
     limit: int = 100,
     offset: int = 0,
+    include_closed: bool = False,
     db: Session = Depends(get_session),
 ) -> list[Market]:
-    stmt = select(Market).order_by(Market.created_at.desc()).limit(limit).offset(offset)
+    stmt = select(Market)
+    if include_closed:
+        # Full history (incl. resolved / past-close), most-recently-ingested first.
+        stmt = stmt.order_by(Market.created_at.desc())
+    else:
+        # Only tradeable markets, soonest-to-close first (i.e. most current).
+        stmt = stmt.where(Market.active_clause()).order_by(Market.close_time.asc())
+    stmt = stmt.limit(limit).offset(offset)
     return list(db.scalars(stmt))
 
 

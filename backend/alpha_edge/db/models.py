@@ -14,6 +14,7 @@ from sqlalchemy import (
     ForeignKey,
     Integer,
     Text,
+    and_,
     func,
 )
 from sqlalchemy.dialects.postgresql import UUID
@@ -89,6 +90,17 @@ class Market(Base):
     sentiment_events: Mapped[list[SentimentEvent]] = relationship(
         back_populates="market", cascade="all, delete-orphan"
     )
+
+    @staticmethod
+    def active_clause():
+        """Predicate for a genuinely tradeable market: unresolved AND not past close.
+
+        'open' (``resolved_at IS NULL``) alone is insufficient — the refresh never
+        sets ``resolved_at``, so a market whose ``close_time`` has passed would stay
+        "open" forever and pollute the list/counts. A market is only active while
+        its close time is still in the future.
+        """
+        return and_(Market.resolved_at.is_(None), Market.close_time > func.now())
 
 
 class Signal(Base):
