@@ -12,7 +12,7 @@ Every refresh, the system:
 
 1. **Polls live markets** from Polymarket Gamma API and Kalshi public read API. Upserts ~100 markets with current YES prices and liquidity.
 2. **Pulls fresh evidence** for each market from 8+ source types — Google News (per-market query), Bluesky public search, Reddit (RSS), RotoWire / ESPN / Yahoo / CBS RSS, ESPN news API, X via syndication, Hacker News for finance/politics.
-3. **Classifies each text snippet** with Claude Sonnet 4.6 against the specific market question, scoring `sentiment`, `relevance`, `impact_direction`, and `confidence`. Drops anything Claude judges off-topic; weights remaining evidence by source credibility × confidence.
+3. **Classifies each text snippet** with Claude Sonnet 4.6 against the specific market question, scoring `sentiment`, `relevance`, `impact_direction`, and `confidence`. Drops anything Claude judges off-topic; weights remaining evidence by source credibility × confidence. If no `ANTHROPIC_API_KEY` is configured, this step transparently falls back to VADER (rule-based) sentiment — the system runs fully keyless, trading context-awareness for zero cost.
 4. **Computes a Bayesian posterior** by combining the market-implied prior with the weighted sentiment likelihood:
 
    ```
@@ -137,7 +137,7 @@ Tier thresholds (`market/edge.py`):
 
 ## Quickstart
 
-Requires Docker, Python 3.11+, Node 20+, and an Anthropic API key (optional but recommended).
+Requires Docker, Python 3.11+, and Node 20+. An Anthropic API key is **optional**: without it, sentiment classification automatically falls back to VADER (rule-based, no cost) and the app runs fully keyless — set a key only to upgrade to LLM-grade, context-aware sentiment.
 
 ```bash
 # 1. Postgres (port 5433 to avoid conflict with system instances)
