@@ -35,6 +35,10 @@ class Settings(BaseSettings):
     anthropic_sentiment_model: str = "claude-sonnet-4-6"
     llm_min_liquidity: float = 1000.0  # skip LLM classification on illiquid markets
 
+    # Sentiment evidence gating (esp. in keyless/VADER mode, which has no LLM
+    # relevance filter): drop evidence whose publish date is older than this.
+    sentiment_max_age_days: int = 3
+
 
 @lru_cache
 def get_settings() -> Settings:
