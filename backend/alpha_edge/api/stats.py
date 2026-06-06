@@ -20,7 +20,7 @@ def dashboard_stats(db: Session = Depends(get_session)) -> dict:
 
     market_count = db.scalar(select(func.count(Market.id))) or 0
     open_market_count = db.scalar(
-        select(func.count(Market.id)).where(Market.resolved_at.is_(None))
+        select(func.count(Market.id)).where(Market.active_clause())
     ) or 0
     signal_count = db.scalar(select(func.count(Signal.id))) or 0
     sentiment_count = db.scalar(select(func.count(SentimentEvent.id))) or 0

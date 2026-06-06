@@ -40,7 +40,7 @@ def current_edge_report(
         select(Signal, Market)
         .join(subq, Signal.id == subq.c.id)
         .join(Market, Market.id == Signal.market_id)
-        .where(Market.resolved_at.is_(None))
+        .where(Market.active_clause())
     )
     items: list[EdgeReportItem] = []
     for signal, market in db.execute(stmt).all():
