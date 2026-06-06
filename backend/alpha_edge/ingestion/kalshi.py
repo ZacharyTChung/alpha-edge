@@ -6,8 +6,9 @@ would require RSA-signed requests; we don't do that here.
 """
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
@@ -27,6 +28,71 @@ def _get(path: str, params: dict[str, Any] | None = None) -> dict:
 
 
 _SINGLE_EVENT_SERIES = ("KXNBAGAME", "KXNFLGAME", "KXMLBGAME", "KXNHLGAME")
+
+_MONTHS = {
+    "JAN": 1, "FEB": 2, "MAR": 3, "APR": 4, "MAY": 5, "JUN": 6,
+    "JUL": 7, "AUG": 8, "SEP": 9, "OCT": 10, "NOV": 11, "DEC": 12,
+}
+# Game tickers embed the event date: KXNBAGAME-26JUN03NYKSAS-NYK (date only) or
+# KXMLBGAME-26MAY092110ATLLAD-ATL (date + HHMM start time).
+_GAME_TICKER = re.compile(r"-(\d{2})([A-Z]{3})(\d{2})(\d{4})?")
+
+
+def _ticker_close(ticker: str) -> datetime | None:
+    """Derive the market's real close time from a Kalshi game ticker.
+
+    Kalshi's API ``close_time`` for these markets is the *series* window end
+    (a Finals market shows 2026-06-18 for a June 3 game), so we prefer the date
+    embedded in the ticker. A buffer is added so a game played *today* isn't
+    hidden before tip-off: ~4h past the start when the ticker carries a time
+    (MLB/NHL), else the end of the game day (date-only NBA/NFL).
+    """
+    m = _GAME_TICKER.search(ticker or "")
+    if not m:
+        return None
+    yy, mon, dd, hhmm = m.groups()
+    month = _MONTHS.get(mon)
+    if month is None:
+        return None
+    try:
+        base = datetime(2000 + int(yy), month, int(dd), tzinfo=timezone.utc)
+        if hhmm:
+            base = base.replace(hour=int(hhmm[:2]), minute=int(hhmm[2:]))
+            return base + timedelta(hours=4)
+        return base + timedelta(days=1)
+    except ValueError:
+        return None
+
+
+def _event_key(ticker: str) -> str:
+    """Collapse a per-team game ticker to its base event.
+
+    Kalshi lists one market per outcome: KXNBAGAME-26JUN03NYKSAS-NYK and
+    ...-SAS are the two sides of one binary market, sharing the base event
+    KXNBAGAME-26JUN03NYKSAS. We keep one row per event to avoid duplicates.
+    """
+    return ticker.rsplit("-", 1)[0] if ticker and "-" in ticker else ticker
+
+
+def _ticker_of(it: dict) -> str:
+    return it.get("ticker") or it.get("external_id") or ""
+
+
+def _dedupe_by_event(items: list[dict]) -> list[dict]:
+    """Keep one market per event, deterministically the lexicographically-smallest
+    team-side ticker. Determinism matters: ingestion must always pick the SAME
+    side so re-ingestion upserts the same row instead of creating the other side.
+    """
+    best: dict[str, dict] = {}
+    order: list[str] = []
+    for it in items:
+        key = _event_key(_ticker_of(it))
+        if key not in best:
+            best[key] = it
+            order.append(key)
+        elif _ticker_of(it) < _ticker_of(best[key]):
+            best[key] = it
+    return [best[key] for key in order]
 
 
 def fetch_active_markets(
@@ -59,7 +125,7 @@ def fetch_active_markets(
             continue
         markets = data.get("markets") or []
         out.extend(_normalize(markets, limit - len(out)))
-    return out
+    return _dedupe_by_event(out)
 
 
 def _normalize(markets: list[dict], remaining: int) -> list[dict]:
@@ -126,8 +192,13 @@ def _classify_category(ticker: str) -> Category:
 
 
 def to_market_row(item: dict) -> Market:
-    end_iso = item.get("end_date") or "2099-01-01T00:00:00Z"
-    close_time = datetime.fromisoformat(end_iso.replace("Z", "+00:00"))
+    ticker = item.get("ticker") or ""
+    # Prefer the real event date encoded in the ticker over Kalshi's series-window
+    # close_time; fall back to the API field for any non-game ticker.
+    close_time = _ticker_close(ticker)
+    if close_time is None:
+        end_iso = item.get("end_date") or "2099-01-01T00:00:00Z"
+        close_time = datetime.fromisoformat(end_iso.replace("Z", "+00:00"))
     raw = item.get("raw") or {}
     liquidity = 0.0
     for key in ("liquidity_dollars", "open_interest_fp", "notional_value_dollars"):
