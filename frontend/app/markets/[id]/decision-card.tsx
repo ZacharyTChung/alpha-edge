@@ -1,8 +1,8 @@
 import type { DecisionInfo } from "@/lib/api";
 
 const DECISION_COLORS: Record<DecisionInfo["decision"], string> = {
-  BET_OVER: "var(--accent)",
-  BET_UNDER: "var(--bad)",
+  BUY_YES: "var(--accent)",
+  BUY_NO: "var(--bad)",
   NO_BET: "var(--muted)",
 };
 
@@ -23,9 +23,9 @@ const RISK_COLORS: Record<DecisionInfo["risk_level"], string> = {
  *
  * 1. **Outcome Forecast** — what the model thinks will happen (YES / NO /
  *    UNCERTAIN). Shown regardless of bet recommendation.
- * 2. **Bet Decision** — BET OVER / BET UNDER / NO BET, derived from edge +
- *    confidence + saturation. Saturated markets always say NO BET even when
- *    the forecast is highly confident.
+ * 2. **Bet Decision** — BUY YES / BUY NO / NO BET, derived from edge +
+ *    confidence + saturation. "Buy YES" = the model thinks the YES outcome is
+ *    underpriced; "Buy NO" = overpriced. Saturated markets always say NO BET.
  * 3. **Confidence + Reasoning** — the explanation.
  *
  * The forecast/decision separation fixes the most common UX confusion:

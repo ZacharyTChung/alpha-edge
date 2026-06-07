@@ -79,20 +79,39 @@ def _ticker_of(it: dict) -> str:
 
 
 def _dedupe_by_event(items: list[dict]) -> list[dict]:
-    """Keep one market per event, deterministically the lexicographically-smallest
-    team-side ticker. Determinism matters: ingestion must always pick the SAME
-    side so re-ingestion upserts the same row instead of creating the other side.
+    """Keep one market per event and de-vig its price.
+
+    Determinism: keep the lexicographically-smallest team-side ticker so
+    re-ingestion upserts the same row rather than creating the other side.
+
+    De-vig: a Kalshi game lists one YES contract per team and their prices sum
+    to >1 (the spread/overround). Replace the kept side's raw price with the
+    no-vig fair win probability, computed proportionally across all sides:
+    ``fair = kept_price / Σ all-side prices`` (so fair_yes + fair_no = 1).
     """
-    best: dict[str, dict] = {}
+    groups: dict[str, list[dict]] = {}
     order: list[str] = []
     for it in items:
         key = _event_key(_ticker_of(it))
-        if key not in best:
-            best[key] = it
+        if key not in groups:
+            groups[key] = []
             order.append(key)
-        elif _ticker_of(it) < _ticker_of(best[key]):
-            best[key] = it
-    return [best[key] for key in order]
+        groups[key].append(it)
+
+    out: list[dict] = []
+    for key in order:
+        members = groups[key]
+        keeper = min(members, key=_ticker_of)
+        prices = [float(m.get("yes_price") or 0.0) for m in members]
+        total = sum(p for p in prices if p > 0.0)
+        kept_price = float(keeper.get("yes_price") or 0.0)
+        # Only de-vig when we actually have >=2 priced sides to normalize against.
+        if kept_price > 0.0 and total > 0.0 and sum(1 for p in prices if p > 0.0) >= 2:
+            keeper["raw_yes_price"] = kept_price
+            keeper["overround"] = total
+            keeper["yes_price"] = kept_price / total
+        out.append(keeper)
+    return out
 
 
 def fetch_active_markets(
@@ -200,6 +219,15 @@ def to_market_row(item: dict) -> Market:
         end_iso = item.get("end_date") or "2099-01-01T00:00:00Z"
         close_time = datetime.fromisoformat(end_iso.replace("Z", "+00:00"))
     raw = item.get("raw") or {}
+    # Name which side YES is. Kalshi's "Game 3: San Antonio at New York Winner?"
+    # is ambiguous once we collapse to one team's contract; yes_sub_title tells us
+    # the kept side's team, so rewrite to "New York to win — Game 3: ...".
+    question = item["question_text"]
+    yes_team = (raw.get("yes_sub_title") or "").strip()
+    if yes_team and "Winner?" in question:
+        base = question.replace(" Winner?", "").strip()
+        question = f"{yes_team} to win — {base}"
+
     liquidity = 0.0
     for key in ("liquidity_dollars", "open_interest_fp", "notional_value_dollars"):
         try:
@@ -212,7 +240,7 @@ def to_market_row(item: dict) -> Market:
     return Market(
         platform=Platform.KALSHI,
         external_id=item["external_id"],
-        question_text=item["question_text"][:500],
+        question_text=question[:500],
         category=_classify_category(item.get("ticker") or ""),
         resolution_criteria=raw.get("rules_primary", "") or "",
         close_time=close_time,

@@ -2,9 +2,10 @@
 
 - Confidence: starts at 8/10, subtract for risk flags, +1 if 3+ Tier 1-2 sources
   corroborate, floor of 3/10.
-- Decision: BET OVER if edge ≥ +5pp AND confidence ≥ 7
-            BET UNDER if edge ≤ −5pp AND confidence ≥ 7
-            NO BET otherwise (low confidence or |edge| < 3pp = noise)
+- Decision: BUY YES if edge ≥ +5pp AND confidence ≥ 7 (model thinks YES is underpriced)
+            BUY NO  if edge ≤ −5pp AND confidence ≥ 7 (model thinks YES is overpriced)
+            NO BET  otherwise (low confidence or |edge| < 3pp = noise)
+  ("YES" is one named outcome — e.g. for a Kalshi "<Team> to win" market, YES = that team.)
 - Risk level: LOW / MEDIUM / HIGH from edge × confidence × signal-conflict count.
 """
 from __future__ import annotations
@@ -16,7 +17,7 @@ from alpha_edge.db.models import SentimentEvent
 from alpha_edge.model.predict import Prediction
 from alpha_edge.sentiment.credibility import beta_for
 
-Decision = Literal["BET_OVER", "BET_UNDER", "NO_BET"]
+Decision = Literal["BUY_YES", "BUY_NO", "NO_BET"]
 RiskLevel = Literal["LOW", "MEDIUM", "HIGH"]
 OutcomeForecast = Literal["YES", "NO", "UNCERTAIN"]
 
@@ -140,9 +141,9 @@ def make_decision(
     elif abs(edge) < EDGE_NOISE_THRESHOLD or conf.score < CONFIDENCE_BET_FLOOR:
         decision = "NO_BET"
     elif edge >= EDGE_ACTIONABLE_THRESHOLD:
-        decision = "BET_OVER"
+        decision = "BUY_YES"
     elif edge <= -EDGE_ACTIONABLE_THRESHOLD:
-        decision = "BET_UNDER"
+        decision = "BUY_NO"
     else:
         decision = "NO_BET"  # 3-5pp edge isn't enough per v2.0
 
@@ -190,11 +191,11 @@ def make_decision(
         else:
             reason = f"Edge {edge*100:+.1f}pp is in the lean range (3-5pp); v2.0 spec requires ≥5pp."
     else:
-        side = "Over" if decision == "BET_OVER" else "Under"
-        agg = "supportive" if (prediction.delta_log_odds * (1 if decision == "BET_OVER" else -1)) > 0 else "neutral"
+        side = "YES" if decision == "BUY_YES" else "NO"
+        agg = "supportive" if (prediction.delta_log_odds * (1 if decision == "BUY_YES" else -1)) > 0 else "neutral"
         reason = (
             f"Model {prediction.probability*100:.1f}% vs market {market_price*100:.1f}% "
-            f"gives {edge*100:+.1f}pp edge to {side}. Sentiment is {agg} "
+            f"gives {edge*100:+.1f}pp edge → buy {side}. Sentiment is {agg} "
             f"(Δℓ = {prediction.delta_log_odds:+.3f}). Confidence {conf.score}/10."
         )
 
