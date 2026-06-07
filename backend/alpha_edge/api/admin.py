@@ -1,6 +1,7 @@
 """Admin endpoints — manual pipeline triggers + diagnostics."""
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -12,6 +13,8 @@ from alpha_edge.db import get_session
 from alpha_edge.db.models import Market, Outcome, SentimentEvent, SentimentLabel, Signal
 from alpha_edge.ingestion import basketball_ref as bbref_mod
 from alpha_edge.market.edge import classify_tier
+from alpha_edge.model import clv as clv_mod
+from alpha_edge.model import elo_ratings
 from alpha_edge.model.predict import predict_market
 from alpha_edge.sentiment import llm as llm_mod
 from alpha_edge.workers.tasks import refresh_all, refresh_priority
@@ -243,5 +246,88 @@ def closing_line_tracking(db: Session = Depends(get_session)) -> dict:
         "direction_hit_rate": round(direction_hits / n, 3) if n else None,
         "avg_market_move_toward_edge": round(move_signed_total / n, 4) if n else None,
         "resolution_accuracy": round(resolution_correct / n, 3) if n else None,
+        "samples": samples,
+    }
+
+
+@router.get("/clv-backtest")
+def clv_backtest(min_edge: float = 0.03, db: Session = Depends(get_session)) -> dict:
+    """Closing-line-value backtest, segmented by prior (Elo vs market).
+
+    For every market that has CLOSED (or resolved) and has signal history, measure
+    how far the market moved toward the model's side between its first actionable
+    signal and the closing line. Positive mean CLV and a >50% beat-close rate are
+    the signal that the model's edges are real, not noise — the standard test on
+    near-efficient markets. Segmenting by Elo-prior vs market-prior answers the
+    key question directly: does the Elo model actually beat the market?
+    """
+    now = datetime.now(timezone.utc)
+    stmt = (
+        select(Market, Signal)
+        .join(Signal, Signal.market_id == Market.id)
+        .order_by(Signal.market_id, Signal.generated_at)
+    )
+    by_market: dict = {}
+    for market, signal in db.execute(stmt).all():
+        e = by_market.setdefault(market.id, {"market": market, "signals": []})
+        e["signals"].append(signal)
+
+    # bucket by status (closed = real CLV; open = line-movement-so-far) × prior.
+    buckets: dict[str, list] = {f"{s}_{p}": [] for s in ("closed", "open") for p in ("elo", "market")}
+    briers: dict[str, list] = {"closed_elo": [], "closed_market": []}
+    samples: list[dict] = []
+    for entry in by_market.values():
+        market = entry["market"]
+        signals = entry["signals"]
+        result = clv_mod.clv_for_signals(signals, min_edge=min_edge)
+        if result is None:
+            continue
+        is_closed = (market.close_time is not None and market.close_time < now) or market.outcome is not None
+        status = "closed" if is_closed else "open"
+        prior = "elo" if elo_ratings.prob_for_market(market) is not None else "market"
+        buckets[f"{status}_{prior}"].append(result)
+        if is_closed and market.outcome is not None:
+            briers[f"closed_{prior}"].append(
+                clv_mod.brier_score(signals[-1].model_probability, market.outcome == Outcome.YES)
+            )
+        if len(samples) < 25:
+            samples.append({
+                "question_text": market.question_text[:90],
+                "status": status,
+                "prior": prior,
+                "side": "YES" if result.direction > 0 else "NO",
+                "entry_market_p": round(result.entry_market_p, 3),
+                "latest_market_p": round(result.close_market_p, 3),
+                "clv_pp": result.clv_pp,
+                "moved_toward_model": result.beat_close,
+                "outcome": market.outcome.value if market.outcome else None,
+            })
+
+    def summarize(cs: list, bs: list | None = None) -> dict:
+        if not cs:
+            return {"n": 0, "beat_rate": None, "mean_clv_pp": None, "brier": None}
+        return {
+            "n": len(cs),
+            "beat_rate": round(sum(1 for c in cs if c.beat_close) / len(cs), 3),
+            "mean_clv_pp": round(sum(c.clv_pp for c in cs) / len(cs), 2),
+            "brier": round(sum(bs) / len(bs), 4) if bs else None,
+        }
+
+    return {
+        "min_edge": min_edge,
+        "closed_backtest": {  # the real test: did we beat the closing line?
+            "elo_prior": summarize(buckets["closed_elo"], briers["closed_elo"]),
+            "market_prior": summarize(buckets["closed_market"], briers["closed_market"]),
+        },
+        "open_in_progress": {  # leading indicator: line movement toward us so far
+            "elo_prior": summarize(buckets["open_elo"]),
+            "market_prior": summarize(buckets["open_market"]),
+        },
+        "note": (
+            "CLV = market move toward the model's side (entry→latest), in probability "
+            "points. closed_backtest is the real test (>50% beat_rate + positive mean_clv_pp "
+            "= real edge; brier on resolved only). open_in_progress is a leading indicator "
+            "on live markets — not yet final CLV."
+        ),
         "samples": samples,
     }
