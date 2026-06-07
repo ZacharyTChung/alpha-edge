@@ -128,9 +128,15 @@ def get_calculation(market_id: UUID, db: Session = Depends(get_session)) -> dict
             "implied_payout_per_dollar": round(decimal_odds - 1, 3) if decimal_odds else None,
         },
         "prior": {
+            "source": pred.prior_source,
+            "prior_probability": round(pred.prior_probability, 4),
             "p_market": round(market_price, 4),
             "log_odds": round(pred.prior_log_odds, 4),
-            "comment": "Market price treated as prior; Phase 2 will swap in a stats-based prior",
+            "comment": (
+                f"Prior = {'Elo team rating' if pred.prior_source == 'elo' else 'de-vigged market price'} "
+                f"({pred.prior_probability * 100:.1f}%); edge is measured against the "
+                f"market ({market_price * 100:.1f}%)."
+            ),
         },
         "evidence": {
             "n_events": pred.n_evidence,
