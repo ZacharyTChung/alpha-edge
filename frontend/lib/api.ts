@@ -101,7 +101,7 @@ export interface SourceContribution {
 }
 
 export interface DecisionInfo {
-  decision: "BET_OVER" | "BET_UNDER" | "NO_BET";
+  decision: "BUY_YES" | "BUY_NO" | "NO_BET";
   risk_level: "LOW" | "MEDIUM" | "HIGH";
   confidence: number;
   confidence_floor: number;
