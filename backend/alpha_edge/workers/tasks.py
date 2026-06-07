@@ -19,6 +19,7 @@ from alpha_edge.db.session import SessionLocal
 from alpha_edge.ingestion import basketball_ref as bbref_mod
 from alpha_edge.ingestion import kalshi as kalshi_client
 from alpha_edge.ingestion import polymarket as poly_client
+from alpha_edge.model import elo_ratings
 from alpha_edge.model.predict import predict_market, write_signal
 from alpha_edge.sentiment import bluesky as bsky_mod
 from alpha_edge.sentiment import hn as hn_mod
@@ -169,6 +170,7 @@ def poll_kalshi_markets(
     summary: RefreshSummary,
     limit: int = 50,
 ) -> list[tuple[Market, float]]:
+    elo_ratings.ensure_fresh()  # rebuild team Elo (cached ~6h) before predictions
     items = kalshi_client.fetch_active_markets(limit=limit)
     out: list[tuple[Market, float]] = []
     for item in items:

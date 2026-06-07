@@ -40,3 +40,35 @@ def fetch_team_advanced(team_id: int, season: str) -> Iterable[dict]:
 
 def fetch_games_for_date(target: date) -> Iterable[dict]:
     raise NotImplementedError("Wire to NBA Stats scoreboard endpoint in Phase 1")
+
+
+# stats.nba.com refuses minimal headers; these are the browser-like set it needs.
+_STATS_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+    "Referer": "https://www.nba.com/",
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "x-nba-stats-origin": "stats",
+    "x-nba-stats-token": "true",
+    "Connection": "keep-alive",
+}
+
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
+def fetch_team_game_results(season: str, season_type: str = "Regular Season") -> list[dict]:
+    """One row per team per game from leaguegamelog (e.g. season='2025-26').
+
+    Each row is a dict with TEAM_ABBREVIATION, MATCHUP ('GSW @ LAL'), WL, PTS,
+    GAME_ID, GAME_DATE — enough to replay the season for Elo ratings.
+    """
+    params = {
+        "Counter": 0, "Direction": "ASC", "LeagueID": "00", "PlayerOrTeam": "T",
+        "Season": season, "SeasonType": season_type, "Sorter": "DATE",
+    }
+    with httpx.Client(timeout=30.0) as client:
+        r = client.get(f"{NBA_STATS_BASE}/leaguegamelog", params=params, headers=_STATS_HEADERS)
+        r.raise_for_status()
+        data = r.json()
+    rs = data["resultSets"][0]
+    cols = rs["headers"]
+    return [dict(zip(cols, row)) for row in rs["rowSet"]]

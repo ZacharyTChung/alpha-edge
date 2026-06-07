@@ -57,11 +57,15 @@ from alpha_edge.db.models import (
     Signal,
 )
 from alpha_edge.market.edge import classify_tier
+from alpha_edge.model import elo_ratings
 from alpha_edge.model.bayesian import from_log_odds, log_odds
 from alpha_edge.sentiment.credibility import beta_for
 
 # Caps and priors
 K_MAX_SOURCE = 0.8       # max |log-LR| any single source can contribute
+K_SENTIMENT_TOTAL_CAP = 0.5  # max |total sentiment shift| in log-odds (≈ ±12pp at
+#   p=0.5). With an Elo prior, sentiment is a secondary nudge — not the driver —
+#   so the total can't drag a 54% game to 92% the way uncapped summing did.
 SIGMA_PRIOR_BASELINE = 0.225  # σ when there is zero evidence (≈ ±18pp at p=0.5)
 NO_EVIDENCE_HALFWIDTH = 0.10  # CI halfwidth used when n_evidence == 0
 
@@ -93,6 +97,8 @@ class Prediction:
     variance_log_odds: float = 0.0
     sigma_log_odds: float = 0.0
     contributions: list[SourceContribution] = field(default_factory=list)
+    prior_source: str = "market"      # "elo" when an Elo rating drove the prior
+    prior_probability: float = 0.0    # the prior (before sentiment): Elo or market
 
 
 def _signed_score(label: SentimentLabel, relevance: float, confidence_proxy: float) -> float:
@@ -144,7 +150,17 @@ def predict_market(
     if not 0.0 < market_price < 1.0:
         market_price = max(0.01, min(0.99, market_price))
 
-    prior_lo = log_odds(market_price)
+    # Independent statistical prior: Elo win prob when we have ratings for both
+    # teams, else fall back to the (de-vigged) market price. This is what lets
+    # the model disagree with the market on fundamentals rather than restate it.
+    elo_p = elo_ratings.prob_for_market(market)
+    if elo_p is not None:
+        prior_p = max(0.02, min(0.98, elo_p))
+        prior_source = "elo"
+    else:
+        prior_p = market_price
+        prior_source = "market"
+    prior_lo = log_odds(prior_p)
 
     events = list(
         db.scalars(
@@ -157,9 +173,9 @@ def predict_market(
 
     if not events:
         return Prediction(
-            probability=market_price,
-            ci_low=max(0.0, market_price - NO_EVIDENCE_HALFWIDTH),
-            ci_high=min(1.0, market_price + NO_EVIDENCE_HALFWIDTH),
+            probability=prior_p,
+            ci_low=max(0.0, prior_p - NO_EVIDENCE_HALFWIDTH),
+            ci_high=min(1.0, prior_p + NO_EVIDENCE_HALFWIDTH),
             sentiment_score=0.0,
             sentiment_weight=0.0,
             stats_weight=1.0,
@@ -169,6 +185,8 @@ def predict_market(
             posterior_log_odds=prior_lo,
             variance_log_odds=SIGMA_PRIOR_BASELINE ** 2,
             sigma_log_odds=SIGMA_PRIOR_BASELINE,
+            prior_source=prior_source,
+            prior_probability=prior_p,
         )
 
     # 1. Group events by source key (entity is the canonical handle/feed key
@@ -219,6 +237,11 @@ def predict_market(
         delta_lo += capped
         variance += var_source
 
+    # Cap the *total* sentiment shift. Per-source caps already bound any single
+    # source, but their sum was unbounded — enough positive sources could drag
+    # the prior across the board. Sentiment is a secondary nudge, not the driver.
+    delta_lo = max(-K_SENTIMENT_TOTAL_CAP, min(K_SENTIMENT_TOTAL_CAP, delta_lo))
+
     sigma = math.sqrt(variance)
     posterior_lo = prior_lo + delta_lo
     posterior_p = from_log_odds(posterior_lo)
@@ -249,6 +272,8 @@ def predict_market(
         variance_log_odds=variance,
         sigma_log_odds=sigma,
         contributions=sorted(contributions, key=lambda c: -abs(c.capped_logLR)),
+        prior_source=prior_source,
+        prior_probability=prior_p,
     )
 
 
