@@ -125,7 +125,9 @@ def fetch_default(max_age_days: int = 60) -> list[XPost]:
                 ts = datetime.strptime(p.created_at, "%a %b %d %H:%M:%S %z %Y").timestamp()
             except Exception:
                 ts = 0
-            if ts == 0 or ts >= cutoff:
+            # Drop undated posts too — this timeline is engagement-sorted across
+            # years, so an unparseable date can't be trusted to be recent.
+            if ts >= cutoff:
                 out.append(p)
     return out
 

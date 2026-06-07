@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from alpha_edge.config import get_settings
 from alpha_edge.db.models import (
     Category,
     Market,
@@ -27,6 +29,69 @@ from alpha_edge.sentiment import reddit as reddit_mod
 from alpha_edge.sentiment import twitter as twitter_mod
 from alpha_edge.sentiment import x_syndication as xs_mod
 from alpha_edge.sentiment.credibility import credibility_for
+
+_GATE_STOPWORDS = {
+    "game", "winner", "series", "match", "season", "league", "final", "finals",
+    "playoff", "playoffs", "today", "tonight", "team", "over", "under",
+    "yes", "no", "the", "and", "for", "will",
+}
+
+
+def _parse_published(value) -> datetime | None:
+    """Best-effort parse of a source publish date into an aware UTC datetime.
+
+    Handles RSS strings, ISO-8601 (Bluesky/HN), Twitter's format, and epoch
+    floats (Reddit ``created_utc``). Returns None if missing or unparseable.
+    """
+    if value in (None, ""):
+        return None
+    if isinstance(value, (int, float)):
+        return datetime.fromtimestamp(value, tz=timezone.utc) if value > 0 else None
+    try:
+        from dateutil import parser as _dateparser
+
+        dt = _dateparser.parse(str(value))
+    except Exception:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _text_matches_market(text: str, terms: list[str]) -> bool:
+    """Heuristic relevance gate: the evidence must strongly reference the
+    market's entities. Mirrors ``news.match_terms`` strength — >=1 multi-word
+    entity, or >=2 distinct single-word entities, or >=1 long (>=7 char) single
+    entity. Keeps coaching/off-topic chatter off unrelated markets in keyless
+    mode, where there is no LLM relevance score.
+    """
+    hay = (text or "").lower()
+    multi = [t.lower() for t in terms if " " in t]
+    if any(t in hay for t in multi):
+        return True
+    single = [
+        t.lower() for t in terms
+        if " " not in t and len(t) >= 5 and t.lower() not in _GATE_STOPWORDS
+    ]
+    hits = [t for t in single if t in hay]
+    return len(hits) >= 2 or any(len(t) >= 7 for t in hits)
+
+
+def _gate_candidates(candidates: list[dict], terms: list[str], max_age_days: int) -> list[dict]:
+    """Drop evidence that is stale (published before the cutoff) or not actually
+    about this market. Undated candidates pass the recency check (can't assess)
+    but must still pass the relevance check.
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
+    out: list[dict] = []
+    for c in candidates:
+        pub = c.get("published_at")
+        if pub is not None and pub < cutoff:
+            continue
+        if not _text_matches_market(c.get("text", ""), terms):
+            continue
+        out.append(c)
+    return out
 
 
 @dataclass
@@ -159,26 +224,28 @@ def _persist_classified(
     novelty: float,
     relevance: float = 1.0,
     reasoning: str | None = None,
+    detected_at: datetime | None = None,
 ) -> None:
     label_map = {
         "positive": SentimentLabel.POSITIVE,
         "negative": SentimentLabel.NEGATIVE,
         "neutral": SentimentLabel.NEUTRAL,
     }
-    db.add(
-        SentimentEvent(
-            market_id=market.id,
-            source=source,
-            source_url=(source_url or "")[:500],
-            entity=(entity or "")[:200],
-            raw_text=(text or "")[:2000],
-            sentiment=label_map.get(sentiment_label, SentimentLabel.NEUTRAL),
-            credibility_weight=max(0.0, min(1.0, credibility)),
-            novelty_score=max(0.0, min(1.0, novelty)),
-            relevance_score=max(0.0, min(1.0, relevance)),
-            llm_reasoning=(reasoning or None),
-        )
+    event = SentimentEvent(
+        market_id=market.id,
+        source=source,
+        source_url=(source_url or "")[:500],
+        entity=(entity or "")[:200],
+        raw_text=(text or "")[:2000],
+        sentiment=label_map.get(sentiment_label, SentimentLabel.NEUTRAL),
+        credibility_weight=max(0.0, min(1.0, credibility)),
+        novelty_score=max(0.0, min(1.0, novelty)),
+        relevance_score=max(0.0, min(1.0, relevance)),
+        llm_reasoning=(reasoning or None),
     )
+    if detected_at is not None:
+        event.detected_at = detected_at
+    db.add(event)
 
 
 def _build_search_query(terms: list[str]) -> str:
@@ -244,7 +311,7 @@ def scrape_sentiment(
             summary.errors.append(f"reddit fetch: {e}")
     summary.twitter_enabled = twitter_mod.is_configured()
     try:
-        x_posts = xs_mod.fetch_default(max_age_days=99999)
+        x_posts = xs_mod.fetch_default(max_age_days=get_settings().sentiment_max_age_days)
     except Exception as e:
         summary.errors.append(f"x_syndication: {e}")
         x_posts = []
@@ -268,6 +335,7 @@ def scrape_sentiment(
                     "entity": ", ".join(doc.matched_terms),
                     "source_key": doc.source,
                     "base_credibility": credibility_for(doc.source),
+                    "published_at": _parse_published(doc.publish_date),
                 })
                 summary.google_news_events += 1
         except Exception as e:
@@ -283,6 +351,7 @@ def scrape_sentiment(
                         "entity": post.handle,
                         "source_key": f"bluesky:{post.handle}",
                         "base_credibility": bsky_mod.credibility_for_post(post),
+                        "published_at": _parse_published(post.created_at),
                     })
                     summary.bluesky_events += 1
             except Exception as e:
@@ -296,6 +365,7 @@ def scrape_sentiment(
                 "entity": ", ".join(doc.matched_terms),
                 "source_key": doc.source,
                 "base_credibility": credibility_for(doc.source),
+                "published_at": _parse_published(doc.publish_date),
             })
             if doc.source == "news:rotowire":
                 summary.rotowire_events += 1
@@ -309,6 +379,7 @@ def scrape_sentiment(
                 "entity": ", ".join(doc.matched_terms),
                 "source_key": src_key,
                 "base_credibility": credibility_for(src_key),
+                "published_at": _parse_published(doc.created_utc),
             })
 
         if summary.twitter_enabled and query:
@@ -333,6 +404,7 @@ def scrape_sentiment(
                         "entity": doc.author,
                         "source_key": "news:hn",
                         "base_credibility": hn_mod.credibility_for_post(doc),
+                        "published_at": _parse_published(doc.created_at),
                     })
                     summary.hn_events += 1
             except Exception as e:
@@ -346,10 +418,12 @@ def scrape_sentiment(
                 "entity": post.handle,
                 "source_key": f"x:{post.handle}",
                 "base_credibility": xs_mod.credibility_for_handle(post.handle),
+                "published_at": _parse_published(post.created_at),
             })
             summary.x_syndication_events += 1
 
         candidates = _dedupe_candidates(candidates)
+        candidates = _gate_candidates(candidates, terms, get_settings().sentiment_max_age_days)
         if not candidates:
             continue
 
@@ -382,6 +456,7 @@ def scrape_sentiment(
                     db, market, c["text"], c["source_enum"], c["url"], c["entity"],
                     cls.sentiment, final_cred, novelty=1.0,
                     relevance=cls.relevance, reasoning=cls.reasoning,
+                    detected_at=c.get("published_at"),
                 )
                 summary.sentiment_events += 1
         else:
@@ -391,6 +466,7 @@ def scrape_sentiment(
                 _persist_classified(
                     db, market, c["text"], c["source_enum"], c["url"], c["entity"],
                     classified.sentiment.value, c["base_credibility"], novelty=1.0,
+                    detected_at=c.get("published_at"),
                 )
                 summary.sentiment_events += 1
 
@@ -489,6 +565,7 @@ def scrape_sentiment_priority(
                     "entity": ", ".join(doc.matched_terms),
                     "source_key": doc.source,
                     "base_credibility": credibility_for(doc.source),
+                    "published_at": _parse_published(doc.publish_date),
                 })
                 summary.google_news_events += 1
         except Exception as e:
@@ -504,6 +581,7 @@ def scrape_sentiment_priority(
                         "entity": post.handle,
                         "source_key": f"bluesky:{post.handle}",
                         "base_credibility": bsky_mod.credibility_for_post(post),
+                        "published_at": _parse_published(post.created_at),
                     })
                     summary.bluesky_events += 1
             except Exception as e:
@@ -518,9 +596,11 @@ def scrape_sentiment_priority(
                 "entity": ", ".join(doc.matched_terms),
                 "source_key": src_key,
                 "base_credibility": credibility_for(src_key),
+                "published_at": _parse_published(doc.created_utc),
             })
 
         candidates = _dedupe_candidates(candidates)
+        candidates = _gate_candidates(candidates, terms, get_settings().sentiment_max_age_days)
         if not candidates:
             continue
 
@@ -549,6 +629,7 @@ def scrape_sentiment_priority(
                     db, market, c["text"], c["source_enum"], c["url"], c["entity"],
                     cls.sentiment, final_cred, novelty=1.0,
                     relevance=cls.relevance, reasoning=cls.reasoning,
+                    detected_at=c.get("published_at"),
                 )
                 summary.sentiment_events += 1
         else:
@@ -557,6 +638,7 @@ def scrape_sentiment_priority(
                 _persist_classified(
                     db, market, c["text"], c["source_enum"], c["url"], c["entity"],
                     classified.sentiment.value, c["base_credibility"], novelty=1.0,
+                    detected_at=c.get("published_at"),
                 )
                 summary.sentiment_events += 1
 
